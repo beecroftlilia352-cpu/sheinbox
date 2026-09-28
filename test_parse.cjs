@@ -174,5 +174,21 @@ check('组合价：正文里那个 18.41 的尺码价被组合里的更低值修
   (p108.specs[1].values.find(v => v.name === '36-37【建议拍大一码】') || {}).price === 11.35,
   JSON.stringify((p108.specs[1].values || []).map(v => [v.name, v.price])));
 
+/* 规格写在属性表里的商品（颜色/尺码是一整行逗号值，尺码值还带全角括号）：
+ * 用户报过「有BUG规格都抓不全」—— 整单退化成「单色兜底」。两条坑：带括号的值被当句子扔掉、
+ * 正文弹层只列默认那几档（尺码只有 3 档，实际 5 档）。 */
+const fx100 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1002135913894.txt'), 'utf8');
+const p100 = P.parse(fx100, { url: 'https://detail.1688.com/offer/1002135913894.html' });
+eq('属性表商品：读到两个规格维度', (p100.specs || []).length, 2);
+eq('属性表商品：颜色 9 个值', ((p100.specs || [])[0] || { values: [] }).values.length, 9);
+eq('属性表商品：尺码 5 个值（正文弹层只有 3 档，表里有 5 档）', ((p100.specs || [])[1] || { values: [] }).values.length, 5);
+check('属性表商品：带全角括号的尺码没被当句子扔掉（¥17 留住）',
+  ((p100.specs || [])[1] || { values: [] }).values.some(v => v.name === '36/37（标准尺码）' && v.price === 17),
+  JSON.stringify(((p100.specs || [])[1] || { values: [] }).values.map(v => [v.name, v.price])));
+check('属性表商品：42/43、44/45 这两档补上了（只在件重尺表里出现）',
+  ['42/43（标准尺码）', '44/45（标准尺码）'].every(n => ((p100.specs || [])[1] || { values: [] }).values.some(v => v.name === n)));
+eq('属性表商品：单件重量用件重尺表最轻一档兜底', p100.weight_g, 365);
+check('属性表商品：不再退化成「单色兜底」', (p100.colors || []).length === 9, String((p100.colors || []).length));
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

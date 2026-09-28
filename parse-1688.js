@@ -161,6 +161,53 @@
     return m ? [m[1].trim(), m[2].trim()] : null;
   }
 
+  /* 有些页面把规格写在属性区（颜色 / 尺码 各是一整行逗号分隔的值），规格弹层里只有默认那几档，
+     甚至压根不在正文里 —— 这时按这两张表补全：
+       · 「件重尺」表的表头（如「颜色 尺码 长(cm) … 重量(g)」）就是「页面上哪些属性是规格」的判据，
+         表头里 长(cm) 之前的列名即维度名（页面自己的词，不写死）；
+       · 每行列出的组合把各维度的值收全（含那些没出现在弹层里的档位）；
+       · 属性区「标签 → 逗号值行」的值更全、顺序更权威，放在前面。
+     一律只做「补齐」，已有维度不重建；补不到就返回 null，行为照旧。 */
+  function dimsFromTables(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    let hdr = -1, cols = [];
+    for (let i = 0; i < lines.length; i++) {
+      const cells = lines[i].split('\t').map(s => s.trim());
+      const cut = cells.findIndex(c => /^长\s*\(cm\)$/i.test(c));
+      if (cut > 0 && cells.length >= cut + 2) { hdr = i; cols = cells.slice(0, cut); break; }
+    }
+    if (hdr < 0 || !cols.length) return null;
+    const seen = cols.map(() => new Set()), vals = cols.map(() => []);
+    const push = (j, nm) => { nm = String(nm || '').trim(); if (!nm || seen[j].has(nm)) return; seen[j].add(nm); vals[j].push(nm); };
+    const filled = cols.map(() => '');
+    let minW = null;
+    for (let i = hdr + 1; i < lines.length; i++) {
+      const cells = lines[i].split('\t').map(s => s.trim());
+      if (cells.length < cols.length + 1) break;                 // 不是这张表了
+      let any = false;
+      cols.forEach((c, j) => { if (cells[j]) { filled[j] = cells[j]; any = true; } });   // 合并单元格：沿用上一行
+      if (!any) break;
+      cols.forEach((c, j) => push(j, filled[j]));
+      const w = cells.filter(x => x).map(x => parseFloat(x)).filter(x => Number.isFinite(x) && x > 0).pop();
+      if (w != null) minW = (minW == null) ? w : Math.min(minW, w);
+    }
+    if (!cols.some((c, j) => vals[j].length)) return null;
+    const attrVals = col => {                                    // 属性区：标签单独一行、下一行是逗号值
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (clean(lines[i]) !== col) continue;
+        const parts = clean(lines[i + 1]).split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) return parts;
+      }
+      return [];
+    };
+    const dims = cols.map((c, j) => {
+      const extra = attrVals(c);
+      const all = extra.concat(vals[j].filter(v => extra.indexOf(v) < 0));
+      return { label: c, values: all.map(nm => ({ name: nm, code: null, price: null, stock: null })) };
+    }).filter(d => d.values.length);
+    return dims.length ? { dims, minWeight: minW } : null;
+  }
+
   function pickSpecs(text) {
     const lines = text.split('\n');
     const offs = [];                                            // 每行起始位置，用来把匹配位置换算成行号
@@ -216,7 +263,9 @@
         const code = cm ? cm[2] : null;
         if (cm) name = cm[1].trim();
         if (!name) continue;
-        if (/[¥￥、，,。；;：:（）()]/.test(name)) continue;      // 干净的规格值，不是句子
+        // 干净的规格值，不是句子。注意**不能连括号一起扔**：1688 的尺码常写成
+        // 「36/37（标准尺码）」—— 一扔就是「每个尺码都读不到 → 整单退化成单色兜底」。
+        if (/[¥￥、，,。；;：:]/.test(name)) continue;
         if (/已售|运费|包邮|登录|选择|说明/.test(name)) continue;
         if (/^[\d.]+$/.test(name)) continue;                      // 纯数字不是规格值
         if (valuePair.some(c => (code ? c.code === code : c.name === name))) continue;
@@ -244,7 +293,15 @@
         bare.unshift(t);
       }
       if (bare.length >= 2) {
-        const lab = (k >= 0 ? clean(lines[k]) : '') || '规格';
+        // 值块上面那行不一定是维度名（常夹着一行界面词，如「收藏代发」）→ 往上找 3 行内像标签的
+        let lab = '';
+        for (let kk = k; kk >= 0 && kk >= k - 3; kk--) {
+          const t = clean(lines[kk]);
+          if (!t) break;
+          if (LABEL_WORD.test(t)) { lab = t; break; }
+          if (t.length <= 8 && !UI_VALUE.test(t) && !isBareValueLine(t)) { lab = t; break; }
+        }
+        if (!lab) lab = (k >= 0 ? clean(lines[k]) : '') || '规格';
         const firstPos = offs[Math.max(0, labelIdx - bare.length)] || 0;
         bare.forEach((nm, ii) => {
           if (valuePair.some(v => v.name === nm && (v.code || null) === null)) return;
@@ -262,6 +319,19 @@
       if (d.values.some(x => x.name === v.name && (x.code || null) === (v.code || null))) return;
       d.values.push({ name: v.name, code: v.code || null, price: v.price, stock: v.stock, parts: v.parts || null });
     });
+    /* 正文里常常只有「默认那几档」的值（这个商品正文只列 3 个尺码，实际 5 档）→ 用属性表/件重尺表补齐 */
+    const fromTab = dimsFromTables(text);
+    if (fromTab) {
+      fromTab.dims.forEach(fd => {
+        const names = new Set(fd.values.map(v => v.name));
+        const d = dims.find(x => x.label === fd.label) ||
+          dims.find(x => (x.values || []).filter(v => names.has(v.name)).length >= Math.max(2, Math.ceil((x.values || []).length / 2)));
+        if (!d) { dims.push({ label: fd.label, values: fd.values.slice() }); return; }
+        fd.values.forEach(v => { if (!d.values.some(x => x.name === v.name)) d.values.push(v); });
+      });
+      if (fromTab.minWeight != null) dims.minWeight = fromTab.minWeight;
+    }
+
     /* 已售罄的规格值不列入（用户要求：抓取规格的时候，已售罄的规格不抓取）。
      * 判定只认页面上写明的：库存明确是 0，或者值名里带售罄/无货/缺货。
      * 库存数据本身没有（null）的一律保留 —— 页面没写清楚就不猜，宁可多列也不漏。 */
@@ -458,6 +528,7 @@
     const text = toText(input);
     const flat = text.replace(/\s+/g, ' ');
     const specs = pickSpecs(text);      // 动态规格维度（可能是多级：父规格 + 子规格，标签来自页面）
+    const tabWeight = (specs && specs.minWeight != null) ? specs.minWeight : null;   // 件重尺表里最轻的一档
 
     const product = {
       source: { url: meta.url || null, offerId: (meta.url || '').match(/offer\/(\d+)\.html/)?.[1] || null, parsedAt: new Date().toISOString() },
@@ -473,7 +544,7 @@
         /重量\s*\(?g\)?[\t ]+(\d{1,5})(?![\d.])/,
         /重量\s*\(?g\)?[\s\S]{0,120}?\|\s*(\d+)\s*\|/,
         /重量\s*\(?g\)?[^\\d\n]{0,20}(\d{1,5})\s*(?:g|克)/i,
-        /重量[^\d]{0,20}(\d+)\s*g/i]),
+        /重量[^\d]{0,20}(\d+)\s*g/i]) ?? tabWeight,
       box_qty: pickNumber(text, [/箱装数量\s*\|?\s*(\d+)/, /参考装箱数[^\d]{0,20}(\d+)/, /(\d+)\s*个\s*\/?\s*箱/]),
       bladeCount: pickNumber(text, [/剃须刀刀片\s*\|?\s*(\d+)/]),
       isImported: /是否进口\s*\|?\s*是/.test(text) ? true : (/是否进口\s*\|?\s*否/.test(text) ? false : null),
