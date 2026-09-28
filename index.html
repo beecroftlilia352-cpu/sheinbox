@@ -525,7 +525,11 @@ async function aiPlanNow() {
     if (!j.ok) {
       AI_PLAN = null; OV = {};
       AI_NOTE = ' ｜ 变种计划：DeepSeek 没成，已按引擎规则排';
-      $('aiBox').innerHTML = '<span style="color:#dc2626">✖ ' + esc(j.error || 'DeepSeek 没给出计划（原因不明）') + '</span><br>· 已自动回落到引擎规则，表格照常可用。';
+      // 失败也要说清「为什么」：错误串里可能有多条原因（用 ／ 分隔）→ 一条一行，别挤成一坨
+      const why = String(j.error || 'DeepSeek 没给出计划（原因不明）').split(' ／ ');
+      $('aiBox').innerHTML = '<span style="color:#dc2626">✖ ' + esc(why[0] || 'DeepSeek 没给出计划（原因不明）') + '</span>' +
+        (why.slice(1).map(w => '<br><span style="color:#dc2626">· ' + esc(w) + '</span>').join('')) +
+        '<br>· 已自动回落到引擎规则，表格照常可用 —— 再点一次也常常就过了（模型每次想的不一样）。';
       regen(true);
       setStatus('error', 'DeepSeek 没能给出变种计划，已回落到引擎规则：' + (j.error || ''));
       return;

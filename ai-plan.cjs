@@ -298,7 +298,8 @@ async function plan(product, params, cfg) {
   if (!scoped.specs.length) return { ok: false, error: '这个商品没有规格数据，AI 没有可排的东西' };
   const attempts = [];
   let hint = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const MAX_TRIES = 3;      // 模型偶尔整份答歪（比如返回的不是 JSON）→ 多给一次机会，别两次就放弃
+  for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
     const t0 = Date.now();
     let res;
     try { res = await ask(c, buildMessages(scoped, { maxRows, note }, hint)); }
@@ -307,7 +308,11 @@ async function plan(product, params, cfg) {
       return { ok: false, error: `DeepSeek 返回异常（HTTP ${res.http}）${res.raw ? '：' + res.raw.slice(0, 160) : ''}` };
     }
     const parsed = parseJsonLoose(res.content);
-    if (!parsed) { hint = '返回的不是合法 JSON'; attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, bad: 'JSON 解析失败' }); continue; }
+    if (!parsed) {
+      hint = '上一次返回的不是合法 JSON。只输出那个 JSON 对象本身，别加解释、别包代码块。';
+      attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, bad: '返回的不是合法 JSON（没解析出 plan）' });
+      continue;
+    }
     const norm = normalize(scoped, parsed, { maxRows, note });
     attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, rows: (norm.rows || []).length, errs: norm.errs || [] });
     if (norm.ok) {
@@ -319,7 +324,17 @@ async function plan(product, params, cfg) {
     }
     hint = norm.error;
   }
-  return { ok: false, error: 'DeepSeek 的计划两次都没通过校验：' + (attempts[attempts.length - 1].errs || []).join('；'), attempts };
+  /* 失败原因必须说清楚：以前只取最后一条的 errs，而「返回不是 JSON」这类失败没有 errs
+   * → 界面上只剩一个冒号（用户看到的「两次都没通过校验：」后面什么都没有，等于没说）。 */
+  const last = attempts[attempts.length - 1] || {};
+  const why = (last.errs && last.errs.length) ? last.errs.join('；') : (last.bad || '模型没有按要求的格式返回');
+  const parts = [why];
+  const firstBad = attempts.find(a => a.errs && a.errs.length);
+  if (firstBad && firstBad !== last) {
+    const o = firstBad.errs.join('；');
+    if (o && o !== why) parts.push('另一次：' + o);
+  }
+  return { ok: false, error: `DeepSeek 的计划 ${attempts.length} 次都没通过：` + parts.join(' ／ '), attempts };
 }
 
 module.exports = { loadConfig, buildMessages, validatePlan, normalize, plan, parseJsonLoose, scope, MAX_ROWS, SYS, cleanNote };

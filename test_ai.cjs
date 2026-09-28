@@ -183,7 +183,26 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
 (async () => {
   const res = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:1', model: 'x', apiKey: '', hasKey: false });
   check('没配 key → ok=false 且标记 noKey（不联网）', res.ok === false && res.noKey === true, JSON.stringify(res));
-  check('没有规格数据 → 明确说明，不去联网', (await A.plan({ specs: [] }, {}, { apiKey: 'x', hasKey: true })).ok === false);
+  check('没有规格数据 → 明确说明，不去联网', (await A.plan({ specs: [] }, {}, { apiKey: '', hasKey: true })).ok === false);
+
+  /* 两次都不合格时，失败原因必须说清楚。
+   * 用户报过：界面上只有「DeepSeek 的计划两次都没通过校验：」后面一个冒号 —— 因为「返回的不是 JSON」
+   * 这类失败没有 errs，旧代码 join 出来是空串，等于什么都没说。 */
+  const http = require('http');
+  const mk = (body) => new Promise((resolve) => {
+    const srv = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(body); });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const srv1 = await mk(JSON.stringify({ choices: [{ message: { content: '这不是 JSON，抱歉' } }] }));
+  const r1 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srv1.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srv1.close();
+  check('模型老返回非 JSON → 明确失败（不是空理由）', r1.ok === false && /不是合法 JSON/.test(r1.error) && !/：$/.test(r1.error), String(r1.error).slice(0, 120));
+  check('重试机会给到 3 次', (r1.attempts || []).length === 3 && /3 次都没通过/.test(r1.error), (r1.attempts || []).length + ' 次 ／ ' + String(r1.error).slice(0, 80));
+
+  const srv2 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ plan: [{ kind: 'x', values: ['数据里没有的值'], pcs: 1, nameEn: 'Y', nameCn: '值' }] }) } }] }));
+  const r2 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srv2.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srv2.close();
+  check('模型编了页面没有的规格值 → 失败信息里点名是哪个值', r2.ok === false && /数据里没有的规格值/.test(r2.error), String(r2.error).slice(0, 140));
 
   /* 10) 容错解析：模型爱套 ```json 代码块 */
   check('能从 ```json 代码块里抠出 JSON', !!A.parseJsonLoose('```json\n{"plan":[]}\n```'));
