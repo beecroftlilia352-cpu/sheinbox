@@ -28,6 +28,8 @@ const near = (name, got, want, tol = 0.01) => check(name, Math.abs(got - want) <
 const $ = id => d.getElementById(id);
 const rows = () => [...d.querySelectorAll('#tbody tr')];
 const cell = (r, i) => rows()[r].children[i].textContent.trim();
+// 变种名格子里现在多了一个「复制」按钮 → 取名字一律用 .vname，别拿整格 textContent 比
+const vname = (r, i = 2) => { const v = rows()[r].children[i].querySelector('.vname'); return v ? v.textContent : ''; };
 const pricesOf = () => rows().map(r => parseFloat(r.children[10].textContent));
 
 // 1) 初始状态：没抓到商品 → ④ 列表必须是空的（不许拿默认参数凭空生成任何行）
@@ -57,8 +59,8 @@ check('示例：拿货价自动取规格标价 0.34', $('unitCost').value === '0
 check('示例：行数 = 页面规格值数（3 个颜色 → 3 行，不再凭空多出组合行）',
   rows().length === 3, `${rows().length} 行`);
 check('示例：变种名就是页面规格值原文（没有我编的单位/组合）',
-  rows().every(r => ['粉色', '绿色', '紫色'].includes(r.children[2].textContent.trim())),
-  rows().map(r => r.children[2].textContent.trim()).join('、'));
+  rows().every((_, i) => ['粉色', '绿色', '紫色'].includes(vname(i))),
+  rows().map((_, i) => vname(i)).join('、'));
 check('示例：标题进页面', /刮毛刀/.test($('prodTitle').textContent));
 check('示例：店铺/品牌 chip', /远强不锈钢/.test($('prodChips').textContent) && /纳合/.test($('prodChips').textContent));
 check('示例：跨境专供 chip 标红提示', /比价风险高/.test($('prodChips').textContent));
@@ -180,7 +182,7 @@ check('组合值：每格是拆开的原值（不写死「颜色规格」）',
   rows()[0].children[4].textContent.trim() === '英文版.欧规' && rows()[0].children[5].textContent.trim() === '紫色全自动32mm',
   rows()[0].children[4].textContent.trim() + ' | ' + rows()[0].children[5].textContent.trim());
 check('组合值：SKU 用页面顺序 S1/S2 + 包装后缀', cell(0, 1) === 'YQ-6330-S1-1P' && cell(1, 1) === 'YQ-6330-S2-1P', cell(0, 1) + ',' + cell(1, 1));
-check('组合值：变种名 = 页面规格值原文（不加任何我编的尾巴）', rows()[0].children[2].textContent.trim() === '【英文版.欧规】紫色全自动32mm', rows()[0].children[2].textContent.trim());
+check('组合值：变种名 = 页面规格值原文（不加任何我编的尾巴）', vname(0) === '【英文版.欧规】紫色全自动32mm', vname(0));
 // 8.96) 双规格（颜色 + 尺码）：两列都要出；把「规格列上限」调到 1 时收起来并提示还有几级
 w.eval('PRODUCT.source={offerId:"841299382846"}; PRODUCT.specs=[' +
   '{label:"颜色",values:[{name:"白色【3411牛角】",code:null,price:null,stock:null},{name:"粉红【3411牛角】",code:null,price:null,stock:null}]},' +
@@ -213,7 +215,8 @@ check('值里带中文逗号：原样显示在格子里',
   [...new Set(rows().map(r => r.children[4].textContent.trim()))].join(' / '));
 
 // 8.98) 成本价按各规格标价：表格里「成本¥」列各不一样（阶梯价页面的关键行为）
-w.eval('PRODUCT={source:{offerId:"922794624735"}, suggestedUnitCost:2.12, specs:[{label:"颜色",values:[' +
+// 读新商品不再重置参数了（用户要求），所以这里要自己把口径摆好：成本价＝各规格自己的标价
+w.eval('$("costMode").value="spec"; PRODUCT={source:{offerId:"922794624735"}, suggestedUnitCost:2.12, specs:[{label:"颜色",values:[' +
   '{name:"灰色30cm*30cm",code:null,price:2.12,stock:1},' +
   '{name:"灰色*5片装",code:null,price:11.5,stock:1}]}]}; PRODUCT.colors=[]; onProduct(PRODUCT,"阶梯价测试");');
 const costCol = [...d.querySelectorAll('#thead th')].findIndex(th => /成本/.test(th.textContent));
@@ -333,6 +336,8 @@ async function aiPageChecks() {
   }
   await aiPageChecks();
   await browserBoxChecks();
+  paramKeepChecks();
+  await copyBtnChecks();
   finish();
 })();
 
@@ -373,6 +378,77 @@ async function browserBoxChecks() {
   w.fetch = orig;
   $('status').textContent = origStatus;
   box.innerHTML = '';
+}
+
+/* 变种名后面那个「复制」按钮（用户要求：变种名列每个名字后面都加一个） */
+async function copyBtnChecks() {
+  const btns = () => [...d.querySelectorAll('#tbody button.copy')];
+  const nameCol = [...d.querySelectorAll('#thead th')].findIndex(th => /变种名/.test(th.textContent));
+  const names = () => rows().map(r => { const v = r.children[nameCol].querySelector('.vname'); return v ? v.textContent : ''; });
+  check('每个变种名后面都有复制按钮', btns().length > 0 && btns().length === rows().length,
+    `${btns().length} 个按钮 / ${rows().length} 行`);
+  check('复制的内容 = 这一行变种名（不含 AI 档标签、不含按钮文字）',
+    btns().every((b, i) => b.dataset.copy === names()[i]) && names().every(n => n && !/复制/.test(n)),
+    btns().slice(0, 2).map(b => b.dataset.copy).join(' ‖ '));
+
+  // 局域网走 http（非安全上下文）→ navigator.clipboard 不存在，必须靠 execCommand 回退
+  let copied = null;
+  const hadClip = 'clipboard' in w.navigator;
+  try { delete w.navigator.clipboard; } catch (e) {}
+  const origExec = d.execCommand;
+  d.execCommand = () => { const ta = d.querySelector('textarea[readonly]'); copied = ta ? ta.value : null; return true; };
+  const b0 = btns()[0];
+  b0.click();
+  await new Promise(r => setTimeout(r, 15));
+  check('局域网（没有 clipboard API）也能复制：走 execCommand 回退', copied === names()[0], JSON.stringify(copied));
+  check('点完按钮变成「已复制」', /已复制/.test(b0.textContent), b0.textContent);
+  await new Promise(r => setTimeout(r, 1300));
+  check('1.2 秒后按钮恢复成「复制」', b0.textContent === '复制', b0.textContent);
+
+  // 本机 localhost 是安全上下文 → 优先用 navigator.clipboard
+  let secureCopied = null;
+  try {
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async t => { secureCopied = t; } }, configurable: true });
+    Object.defineProperty(w, 'isSecureContext', { value: true, configurable: true });
+    btns()[1].click();
+    await new Promise(r => setTimeout(r, 15));
+    check('安全上下文（本机 localhost）优先用 clipboard API', secureCopied === names()[1], JSON.stringify(secureCopied));
+  } catch (e) {
+    check('安全上下文优先用 clipboard API（jsdom 不支持覆写则跳过）', true, 'skipped: ' + e.message);
+  }
+  d.execCommand = origExec;
+  if (!hadClip) { try { delete w.navigator.clipboard; } catch (e) {} }
+}
+
+/* 读新商品不许刷新定价参数模块（用户原话：「读取新商品后，不要刷新定价参数模块」）
+ * 覆盖三件事：① 你选过的参数原样保留；② 手填的拿货价不被静默覆盖；③ 没动过时仍跟着新商品走。 */
+function paramKeepChecks() {
+  const set = (id, v) => { const e = $(id); e.value = v; e.dispatchEvent(new w.Event('change', { bubbles: true })); };
+  const get = id => $(id).value;
+
+  // 用户手改过一圈参数，然后读一个新商品
+  set('margin', '41'); set('bargain', '18'); set('discount', '12'); set('fxRate', '7.9');
+  set('costMode', 'param'); set('planMode', 'ai'); set('floorThreshold', '2.5');
+  $('unitCost').value = '9.99';                       // 手填拿货价（不打 change，模拟真实手输入）
+  w.eval('PRODUCT.suggestedUnitCost = 2.12; onProduct(PRODUCT, "新商品测试")');
+  check('读新商品后：毛利率保留（41）', get('margin') === '41', get('margin'));
+  check('读新商品后：还价 18 / 折扣 12 保留', get('bargain') === '18' && get('discount') === '12', get('bargain') + '/' + get('discount'));
+  check('读新商品后：汇率 7.9 保留', get('fxRate') === '7.9', get('fxRate'));
+  check('读新商品后：兜底阈值 2.5 保留', get('floorThreshold') === '2.5', get('floorThreshold'));
+  check('读新商品后：「成本价怎么取」保留你选的 param（原来会被重置回 spec）', get('costMode') === 'param', get('costMode'));
+  check('读新商品后：「变种计划怎么排」保留你选的 ai（原来会被重置）', get('planMode') === 'ai', get('planMode'));
+  check('读新商品后：手填的拿货价 9.99 没被静默覆盖', get('unitCost') === '9.99', get('unitCost'));
+  check('拿货价被保留时给出说明 + 一键用新商品的价', /¥2\.12/.test($('costNote').textContent) && !!$('useSuggCost'), $('costNote').textContent.slice(0, 60));
+  $('useSuggCost').click();
+  check('点「用新商品的价」→ 拿货价换成 2.12 且提示消失', get('unitCost') === '2.12' && $('costNote').textContent === '',
+    get('unitCost') + '|' + $('costNote').textContent);
+
+  // 用户没动过拿货价 → 读下一个商品时应该自动跟着走（否则价格会用上一个商品的成本）
+  w.eval('PRODUCT.suggestedUnitCost = 3.5; onProduct(PRODUCT, "第三个商品")');
+  check('没动过拿货价时仍会跟着新商品更新（3.5）', get('unitCost') === '3.5', get('unitCost'));
+
+  // 复位，别影响后面的用例
+  set('margin', '33'); set('bargain', '20'); set('discount', '15'); set('costMode', 'spec'); set('planMode', 'engine');
 }
 
 function finish() {

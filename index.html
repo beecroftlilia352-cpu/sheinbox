@@ -55,6 +55,12 @@
   tbody tr:hover{background:#f8fbff}
   tbody tr.sel{background:#eff6ff}
   td .pn{color:var(--mut)}
+  /* 变种名后面的复制按钮 */
+  button.copy{margin-left:6px;padding:1px 7px;font-size:11.5px;line-height:1.6;border:1px solid var(--line);
+    border-radius:6px;background:#fff;color:var(--mut);cursor:pointer;vertical-align:middle;font-family:inherit}
+  button.copy:hover{background:#f1f5f9;color:#0f172a;border-color:#cbd5e1}
+  button.copy.ok{border-color:#16a34a;color:#16a34a;background:#f0fdf4}
+  button.copy.err{border-color:#dc2626;color:#dc2626;background:#fef2f2}
   td.enpending{background:#fffbeb;color:#92400e}
   td.enpending::after{content:' ⚑';color:#b45309}
   .price{font-weight:700;color:#0f172a}
@@ -146,6 +152,7 @@
         <option value="engine" selected>引擎规则（只列页面规格值）</option>
         <option value="ai">DeepSeek 设计变种（推荐）</option></select></div>
     </div>
+    <div class="hint" id="costNote" style="margin-top:8px"></div>
     <div class="aiPanel">
       <div class="aiHead">
         <button id="btnAi" class="ghost">让 DeepSeek 排一版变种</button>
@@ -201,6 +208,7 @@ const P = window.Parse1688, V = window.VariantEngine;
 let PRODUCT = null, ROWS = [], OV = {}, SEL = 0, TIMER = null;
 let NO_COLORS = false;          // 解析到的颜色为空 → 现在用的是单色兜底方案（regen 会把空颜色替换成“单色”，所以这里单独记
 let EMPTY_REASON = '';          // 列表为空时的原因（没商品 / 没价格），显示在 ④ 的提示和导出报错里
+let AUTO_COST = '';            // 上一次由「读取商品」自动填进拿货价的值：只在这个值没被你改过时才跟着新商品更新
 let AI_PLAN = null;             // DeepSeek 排的变种计划（null = 走引擎规则）；只装组合/件数/英文名，不含价格
 let AI_NOTE = '';               // ④ 标题旁的「变种计划来自哪」提示
 
@@ -233,6 +241,31 @@ function params() {
 }
 const f2 = x => Number.isFinite(x) ? x.toFixed(2) : '—';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* 复制文本到剪贴板。
+ * 注意：局域网走的是 http://192.168.x.x，不是安全上下文 → navigator.clipboard 在那边根本不存在，
+ * 所以必须有 execCommand 回退，否则「复制」按钮在他手机上、或者别的电脑上点了没反应。 */
+async function copyText(txt) {
+  const t = String(txt == null ? '' : txt);
+  try {
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(t);
+      return true;
+    }
+  } catch (e) { /* 落到下面的回退 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    if (ta.setSelectionRange) ta.setSelectionRange(0, t.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (e) { return false; }
+}
 
 /* ---------- 规格维度（父规格 / 子规格，标签来自页面数据，不写死「颜色」） ---------- */
 function dimsOf(prod) {
@@ -358,14 +391,38 @@ function onProductInner(prod, note) {
         c.type + ' ¥' + c.price + (c.minQty ? '（≥' + c.minQty + '件）' : '') + '</button>').join(' ');
     document.querySelectorAll('#pricePicker button').forEach(b => b.onclick = () => {
       $('unitCost').value = b.dataset.price;
+      AUTO_COST = String(b.dataset.price);                // 点档位＝你同意用这个价，下次读商品可跟着更新
+      $('costNote').innerHTML = '';
       if ($('costMode')) $('costMode').value = 'param';   // 点了档位 = 明确要用这个价 → 切成统一拿货价
       regen(false);
     });
   } else {
     $('pricePicker').innerHTML = '<span class="hint" style="color:#dc2626">页面价格没解析到，请在下面手工填拿货价。</span>';
   }
-  if (prod.suggestedUnitCost) $('unitCost').value = prod.suggestedUnitCost;
-  if ($('costMode')) $('costMode').value = 'spec';   // 新商品 → 成本价回到默认「按各规格自己的标价」
+  // 拿货价：只在你「没自己动过」的时候跟着新商品走。
+  // 硬要求（用户原话）：「读取新商品后，不要刷新定价参数模块」
+  // —— 手填过的拿货价、以及你选过的其它参数（成本价怎么取 / 毛利 / 还价 / 折扣 / 汇率 / 兜底 …）一律保留，
+  //    新商品的解析价只作为可点的一键入口给出，不静默覆盖。
+  const suggCost = prod.suggestedUnitCost;
+  if (suggCost) {
+    const curCost = String($('unitCost').value || '').trim();
+    if (!curCost || curCost === String(AUTO_COST)) {          // 空着，或还停在我上次自动填的值 → 可以更新
+      $('unitCost').value = suggCost;
+      AUTO_COST = String(suggCost);
+      $('costNote').innerHTML = '';
+    } else {                                                  // 你自己填过 → 保留，只提示 + 给一键
+      $('costNote').innerHTML = '<span class="hint">这个商品解析到拿货价 <b>¥' + suggCost +
+        '</b>；拿货价一栏保留你填的 <b>' + curCost + '</b>（读新商品不刷新参数） ' +
+        '<button class="ghost mini" id="useSuggCost">用新商品的价 ¥' + suggCost + '</button></span>';
+      const ub = $('useSuggCost');
+      if (ub) ub.onclick = () => {
+        $('unitCost').value = suggCost; AUTO_COST = String(suggCost);
+        $('costNote').innerHTML = ''; regen(true);
+      };
+    }
+  } else {
+    $('costNote').innerHTML = '';
+  }
   OV = {};                                  // 新商品 → 清掉旧的行内改动
   AI_PLAN = null; AI_NOTE = '';             // 新商品 → 上一份 DeepSeek 计划作废
   regen(false);
@@ -522,7 +579,9 @@ function renderRows() {
       '<td class="l mono">' + r.sku + '</td>' +
       // 名字后面那个小标签：只在 AI 档显示（那是模型自己给这行起的名）；引擎档不显示，
       // 免得又变成「往名字里塞我编的词」—— 引擎行的名字必须是页面值原文。
-      '<td class="l">' + r.nameCn + ((r.ai && r.kind) ? ' <span class="pn">' + esc(r.kind) + '</span>' : '') + '</td>' +
+      '<td class="l"><span class="vname">' + esc(r.nameCn) + '</span>' +
+        ((r.ai && r.kind) ? ' <span class="pn">' + esc(r.kind) + '</span>' : '') +
+        '<button class="copy" data-copy="' + esc(r.nameCn) + '" title="复制这个变种名">复制</button></td>' +
       '<td class="l' + (r.enPending ? ' enpending' : '') + '"' + (r.enPending ? ' title="这个词表里没有，英文名还带中文 —— 请在 app.js 的 EN_WORDS 里补词，或直接把变种名改掉"' : '') + '>' + esc(r.nameEn) + '</td>' +
       cols.map(lab => '<td class="l">' + esc((r.spec && r.spec[lab]) || (hasDims ? '' : r.colorSpec)) + '</td>').join('') +
       '<td><input type="number" min="1" step="1" value="' + r.pcs + '" data-pcs="' + r.sku + '" style="width:60px;text-align:right"></td>' +
@@ -761,6 +820,19 @@ $('btnDemo').onclick = () => {
   ].join('\n');
   importText(demo, 'https://detail.1688.com/offer/1063828892516.html');
 };
+
+/* 变种名后面的「复制」按钮（事件委托：表格重绘后照样有效） */
+$('tbody').addEventListener('click', async (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('button.copy') : null;
+  if (!btn) return;
+  e.stopPropagation();
+  const ok = await copyText(btn.dataset.copy || '');
+  btn.textContent = ok ? '已复制' : '复制失败';
+  btn.classList.toggle('ok', ok);
+  btn.classList.toggle('err', !ok);
+  clearTimeout(btn._t);
+  btn._t = setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('ok', 'err'); }, 1200);
+});
 
 /* ---------- 参数联动 ---------- */
 ['unitCost','accessoryCost','freightRate','bargain','discount','stackMode','margin','marginBase','fxRate','floorThreshold','floorAdd','maxDims','costMode']
