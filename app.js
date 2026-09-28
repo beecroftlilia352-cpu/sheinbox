@@ -30,7 +30,9 @@
     '白色': 'White', '红色': 'Red', '黄色': 'Yellow', '橙色': 'Orange', '灰色': 'Grey',
     '玫红': 'Rose Red', '酒红': 'Wine Red', '天蓝': 'Sky Blue', '藏青': 'Navy',
     '米色': 'Beige', '米白': 'Off-White', '透明': 'Clear', '银色': 'Silver', '金色': 'Gold',
-    '棕色': 'Brown', '咖啡色': 'Coffee', '卡其': 'Khaki', '墨绿': 'Dark Green', '浅蓝': 'Light Blue'
+    棕色: 'Brown', 咖啡色: 'Coffee', 卡其: 'Khaki', 墨绿: 'Dark Green', 浅蓝: 'Light Blue',
+    砖红: 'Brick Red', 深灰: 'Dark Grey', 浅灰: 'Light Grey', 深蓝: 'Dark Blue', 深红: 'Dark Red',
+    浅红: 'Light Red', 深绿: 'Dark Green', 浅绿: 'Light Green', 深咖: 'Dark Coffee'
   };
   const cn = (s) => (typeof enOf === 'function' ? enOf(s) : (COLOR_EN[s] || s));   // 未知词保留中文，避免编造
 
@@ -93,8 +95,16 @@
   function enOf(s) {
     let out = String(s == null ? '' : s)
       .replace(/[【】]/g, ' ').replace(/[·.]/g, '. ').replace(/[／/]/g, ' / ').replace(/[，、]/g, ', ');
-    Object.keys(EN_WORDS).sort((a, b) => b.length - a.length)
-      .forEach(k => { out = out.split(k).join(EN_WORDS[k] + ' '); });
+    // 打包写法先转英文（值名里的「5片装」不翻译就会在英文名里留中文）：5片装 → 5-Piece Pack
+    out = out.replace(/([0-9]+)\s*(?:片|枚)\s*装/g, '$1-Piece Pack')
+             .replace(/([0-9]+)\s*件\s*套/g, '$1-Piece Set')
+             .replace(/([0-9]+)\s*(?:件|个|支|条|只|瓶|罐|卷|袋|盒)\s*装/g, '$1-Pack');
+    const table = Object.assign({}, COLOR_EN, EN_WORDS);   // 颜色表 + 规格词表一起用（EN_WORDS 优先）
+    // 用「最左最长」匹配：深灰色 必须命中「深灰」而不是先命中「灰色」再剩个「深」
+    const keys = Object.keys(table).sort((a, b) => b.length - a.length);
+    const re = new RegExp(keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+    out = out.replace(re, m => table[m] + ' ');
+    out = out.replace(/([A-Za-z])\s*色/g, '$1');           // 「深灰色→Dark Grey」这类译完后遗留的「色」
     // 中文词夹在数字/字母旁边会被粘成 "3411Horn"、"35-36Size" —— 补空格
     out = out.replace(/([0-9a-z])([A-Z])/g, '$1 $2').replace(/([A-Za-z])([0-9])/g, '$1 $2');
     return out.replace(/(\.\s*){2,}/g, '. ').replace(/\s*\.\s*/g, '. ').replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
@@ -129,21 +139,42 @@
     return o;
   }
 
-  /* 这一行的拿货价：优先用「这个规格自己的标价」。
+  /* 规格值名里自带的件数：`灰色30cm*30cm*5片装` → 5，`10片装` → 10，`3件套` → 3；说不清就是 1。
+   * 为什么必须有它：1688 一维多值常把「一包几件」写进值名，而且该值的标价是**整包的价**
+   * （5片装 11.5 元 = 那 5 件的钱）。不认这个件数，就会出现「11.5 又被 ×5」的 25 倍错价。 */
+  const PACK_UNITS = '片|个|支|件|条|只|双|枚|张|袋|盒|瓶|包|罐|卷|套';
+  function packQtyOf(name) {
+    const s = String(name == null ? '' : name);
+    const hits = [];
+    const re = new RegExp('([0-9]+)\\s*(?:' + PACK_UNITS + ')\\s*(?:装|包装|套)?(?!起)', 'g');
+    let m;
+    while ((m = re.exec(s))) {
+      const q = parseInt(m[1], 10);
+      if (q > 1 && q <= 200) hits.push(q);
+    }
+    const uniq = Array.from(new Set(hits));
+    return uniq.length === 1 ? uniq[0] : 1;      // 说不清（没有 / 有多个不同数字）→ 按 1 件，不猜
+  }
+
+  /* 这一行的「每件拿货成本」：优先用「这个规格自己的标价」折算到每一件。
    * 1688 一维多值时常写成打包阶梯（单片 2.12 / 5片装 11.5 / 10片装 23），
-   * 用一个平均价/众数糊到所有行上就是错的 —— 所以：
-   *   行里各值同一个价 → 就是它（再由件数乘上去）
-   *   行里是「各值各一支」的不同价（混合装）→ 取均价，乘件数后正好等于各值价相加
-   *   价不一样又说不清件数（六支装/九支装）→ 用参数里的拿货价（不瞎算）
+   * 而 11.5 是**整包 5 件**的价 → 每件 = 11.5 ÷ 5 = 2.30，再由件数乘回去正好等于整包价。
+   * 用一个平均价/众数糊到所有行上、或者把整包价当每件价再乘件数，都是错的。
    */
   function rowUnitCost(vals, pcs, fallback) {
     const fb = (fallback != null && Number.isFinite(Number(fallback))) ? Number(fallback) : null;
-    const ps = (vals || []).map(v => (v && v.price != null && Number.isFinite(Number(v.price)) ? Number(v.price) : null));
-    if (!ps.length || ps.some(x => x === null)) return fb;                 // 有值没标价 → 参数里的拿货价
-    const uniq = Array.from(new Set(ps));
-    if (uniq.length === 1) return uniq[0];                                 // 同一个价 → 用它
-    if (ps.length === n(pcs)) return ps.reduce((a, b) => a + b, 0) / ps.length;  // 各一支 → 均价 × 件数 = 各值相加
-    return fb;
+    const list = (vals || []).filter(Boolean);
+    if (!list.length) return fb;
+    const priceOf = v => (v.price != null && Number.isFinite(Number(v.price))) ? Number(v.price) : null;
+    const costOf = v => (priceOf(v) != null ? priceOf(v) : (fb != null ? fb * packQtyOf(v.name) : null));  // 没标价 → 参数单价 × 自带件数
+    if (list.some(v => costOf(v) == null)) return fb;
+    const baseQty = list.reduce((a, v) => a + packQtyOf(v.name), 0) || 1;
+    const baseCost = list.reduce((a, v) => a + costOf(v), 0);
+    const per = list.map(v => costOf(v) / packQtyOf(v.name));
+    if (n(pcs) === baseQty) return baseCost / (n(pcs) || 1);                    // ① 件数＝这份组合自带件数 → 整份的价 ÷ 件数
+    if (per.every(x => Math.abs(x - per[0]) < 1e-9)) return per[0];             // ② 各值每件成本一致（含全部同价）→ 就用每件成本
+    if (n(pcs) === list.length) return baseCost / (n(pcs) || 1);                // ③ 各值各一支（件数＝值数）→ 各值相加后平均
+    return fb;                                                                  // ④ 说不清 → 用参数拿货价，不瞎算
   }
 
   /* 按商品规格排变种：父规格走原来的业务计划，子规格逐组合展开；每种组合都是一组确定的规格值 */
@@ -154,7 +185,9 @@
     const dims = allDims.slice(0, maxDims);
     const primary = dims[0];
     const colorsAll = primary.values;                          // 真实规格行用**全部**值（上架要覆盖每个规格）
-    const colors = colorsAll.slice(0, p.maxColors);            // 上限只约束「混合装/囤货装」这类包装行，避免行数爆掉
+    // 包装组合行（双支装/混合装/囤货装）只能用「单件规格值」去拼：拿「5片装」去拼双支装会变成半包/整包混乱
+    const singles = colorsAll.filter(c => packQtyOf(c.name) === 1);
+    const colors = (singles.length ? singles : colorsAll).slice(0, p.maxColors);   // 上限只约束包装行，避免行数爆掉
     const tag = (product && product.source && product.source.offerId) ? String(product.source.offerId).slice(-4) : '0000';
 
     // 子规格的笛卡尔组合（每个组合 = 一组具体规格值）；没有子规格时就是一个空组合
@@ -175,6 +208,9 @@
 
     const base = [], extra = [];                             // 先排「真实规格」行，再排包装组合行
     const add = (o, isBase, vals) => {
+      // 整包卖的规格（值名里带「5片装」这类自带件数）→ 件数必须是它的整数倍，否则会算出「半包」这种不存在的货
+      const bq = (vals || []).filter(Boolean).reduce((a, v) => a + packQtyOf(v.name), 0);
+      if (bq > 1) o.pcs = Math.max(bq, Math.round((n(o.pcs) || 1) / bq) * bq);
       // 成本价怎么取：默认「按各规格自己的标价」（1688 常写成打包阶梯：单片/5片装/10片装价不一样）
       o.unitCost = (p.costMode === 'param') ? n(p.unitCost) : rowUnitCost(vals, o.pcs, p.unitCost);
       o.enPending = hasCJK(o.nameEn);
@@ -198,12 +234,20 @@
           code: x.value.code || 'V' + dims.indexOf(x.dim) + (x.dim.values.indexOf(x.value) + 1)
         }));
         const head = picked.length > 1 ? mixHead(vals) : pcode(prim.value, primary.values.indexOf(prim.value));
-        const pcs = Math.max(1, Math.round(n(r.pcs) || 1));
-        const nameCn = r.nameCn || ((r.kind === '原规格' && pcs === 1)
-          ? `${prim.value.name}单支（原规格）`
+        // 每个值「天然几件」（5片装=5）→ 整包卖：件数取整包的整数倍，别出现「半包」
+        const bq = picked.reduce((a, x) => a + packQtyOf(x.value.name), 0) || 1;
+        const rawPcs = Math.max(1, Math.round(n(r.pcs) || 1));
+        const pcs = bq > 1 ? Math.max(bq, Math.round(rawPcs / bq) * bq) : rawPcs;
+        const one = cnVals.length === 1 ? cnVals[0] : null;
+        const oneQ = one ? packQtyOf(one.name) : 0;
+        // 单值行：值名里已经写了「5片装」就不再叠「5支装」（那是模板味，不是信息）；单件值才写「单支」
+        const nameCn = r.nameCn || ((one && (oneQ > 1 || pcs === 1))
+          ? `${one.name}${oneQ > 1 ? '（原规格）' : '单支（原规格）'}`
           : cnMix(cnVals, `${pcs} 支装`) + (r.accessory ? ' + 便携收纳盒' : ''));
-        const nameEn = String(r.nameEn || '').trim() ||
-          (`${cnVals.map(v => enOf(v.name)).join(' + ')} - ${pcs} Pack` + (r.accessory ? ' with Case' : ''));
+        let nameEn = String(r.nameEn || '').trim() ||
+          ((one && oneQ > 1) ? enOf(one.name)
+            : `${cnVals.map(v => enOf(v.name)).join(' + ')} - ${pcs} Pack`);
+        if (r.accessory && one && !/case|盒/i.test(nameEn)) nameEn += ' with Case';   // AI 自己写了就不再叠
         add({
           sku: skuOf(head, combo) + '-' + pcs + 'P' + (r.accessory ? '-C' : ''),
           nameCn, nameEn,
@@ -217,14 +261,18 @@
       const enTail = combo.length ? ` ${cEn(combo)}` : '';        // 英文名同理
       const others = colors.slice(1);
       // 1) 原厂规格：父规格每个值一支（值是页面上的原文，不是模板词）—— 这是「真实规格」行，先排
-      colorsAll.forEach((c, i) => add({
-        sku: skuOf(pcode(c, i), combo) + '-1P',
-        nameCn: `${c.name}单支（原规格）${cnTail}`,
-        nameEn: `${enOf(c.name)}${enTail} - 1 Pack`,
-        spec: specOfValues([c], dims, combo),
-        colorSpec: c.name + (c.code ? ' #' + c.code + '#' : ''),
-        pcs: 1, accessory: false, kind: '原规格', source: c
-      }, true, [c]));
+      //    值名自带件数的（5片装/10片装）→ 这一行就是那一包：件数取整包，名字不再叠一个「单支」
+      colorsAll.forEach((c, i) => {
+        const q = packQtyOf(c.name);
+        return add({
+          sku: skuOf(pcode(c, i), combo) + `-${q}P`,
+          nameCn: (q > 1 ? `${c.name}（原规格）` : `${c.name}单支（原规格）`) + cnTail,
+          nameEn: (q > 1 ? `${enOf(c.name)}${enTail}` : `${enOf(c.name)}${enTail} - 1 Pack`),
+          spec: specOfValues([c], dims, combo),
+          colorSpec: c.name + (c.code ? ' #' + c.code + '#' : ''),
+          pcs: q, accessory: false, kind: '原规格', source: c
+        }, true, [c]);
+      });
       // 2) 首个值双支装
       add({ sku: skuOf(pcode(colors[0], 0), combo) + '-2P', nameCn: `${colors[0].name}双支装${cnTail}`,
         nameEn: `${enOf(colors[0].name)}${enTail} - 2 Pack`, spec: specOfValues([colors[0]], dims, combo),
@@ -323,7 +371,7 @@
     const solved = Number.isFinite(r.priceSolved) ? r.priceSolved : r.price;   // 兜底前的原定价
     const lines = [
       `折扣系数 K = ${Kexpr} = ${f4(K)}`,
-      `拿货成本 = 拿货价 ${f2(p.unitCost)} × ${v.pcs} 件${v.accessory ? ` + 配件 ${f2(p.accessoryCost)}` : ''} = ${f2(r.baseCost)} 元`,
+      `拿货成本 = 每件 ${f2(v.unitCost != null && Number.isFinite(Number(v.unitCost)) ? Number(v.unitCost) : n(p.unitCost))} × ${v.pcs} 件${v.accessory ? ` + 配件 ${f2(p.accessoryCost)}` : ''} = ${f2(r.baseCost)} 元`,
       `运费 = 成本 × 运费率 = ${f2(r.baseCost)} × ${f2(p.freightRate)}% = ${f2(r.freight)} 元`,
       `总成本 = ${f2(r.baseCost)} + ${f2(r.freight)} = ${f2(r.totalCost)} 元`,
       `定价 = 总成本 ÷ ${numExpr} = ${f2(r.totalCost)} ÷ ${f4(den)} = ${f2(solved)} 元` + (r.priceBoost > 0 ? ` → 低价兜底 +${f2(r.priceBoost)} = ${f2(r.price)} 元` : ''),
@@ -339,5 +387,5 @@
     return lines;
   }
 
-  return { DEFAULTS, discountFactor, priceVariant, buildVariants, rowUnitCost, floorDetail, variantPriceBoost, formulaLines, COLOR_EN, specDims, specOfValues, enOf, hasCJK };
+  return { DEFAULTS, discountFactor, priceVariant, buildVariants, rowUnitCost, packQtyOf, floorDetail, variantPriceBoost, formulaLines, COLOR_EN, specDims, specOfValues, enOf, hasCJK };
 });

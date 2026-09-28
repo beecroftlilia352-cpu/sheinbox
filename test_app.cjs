@@ -209,9 +209,47 @@ check('阶梯价：两种规格各一支 → 成本 = 两个价相加 4.33',
 check('阶梯价：六支装件数说不清 → 回落到参数拿货价 5×6=30',
   t(costOf(r => /六支装/.test(r.nameCn)), 30), costOf(r => /六支装/.test(r.nameCn)));
 const lp = V.buildVariants(ladder, { unitCost: 5, maxVariants: 40, costMode: 'param' });
-check('切成「统一拿货价」时 5片装行也用参数值 5',
-  Math.abs((((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost) - 5) < 1e-9,
+check('切成「统一拿货价」时 5片装行也用参数值（5 元/件 × 5 件 = 25）',
+  Math.abs((((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost) - 25) < 1e-9,
   ((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost);
+
+// ── 值名自带件数（5片装/10片装）：整包价不许再被件数乘一遍（曾经出现 11.5 → 57.5 的 25 倍错价）──
+const packRow = lv.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {};
+check('5片装行：件数取整包 5（不是 1）', packRow.pcs === 5, packRow.pcs);
+check('5片装行：成本 = 整包价 11.5（每件 2.30 × 5 件），不是 57.5',
+  t((packRow.pricing || {}).baseCost, 11.5), (packRow.pricing || {}).baseCost);
+check('5片装行：每件成本 = 11.5 ÷ 5 = 2.30', t(packRow.unitCost, 2.3), packRow.unitCost);
+check('5片装行：名字不重复叠「5 支装」（值名里已经有）',
+  /5片装/.test(packRow.nameCn) && !/5\s*支装/.test(packRow.nameCn), packRow.nameCn);
+check('5片装行：SKU 件数段是 -5P', /-5P$/.test(packRow.sku || ''), packRow.sku);
+const tenRow = lv.find(r => r.kind === '原规格' && /10片装/.test(r.nameCn)) || {};
+check('10片装行：件数 10、成本 23', tenRow.pcs === 10 && t((tenRow.pricing || {}).baseCost, 23),
+  `${tenRow.pcs} 件 / ${(tenRow.pricing || {}).baseCost}`);
+check('包装组合行（双支/囤货）不再拿「5片装」去拼（否则会算出半包）',
+  !lv.some(r => r.kind !== '原规格' && /片装/.test(r.nameCn)),
+  lv.filter(r => r.kind !== '原规格' && /片装/.test(r.nameCn)).map(r => r.nameCn).slice(0, 3).join(' | '));
+
+// packQtyOf：只认「值名里明确写了件数」，说不清就不猜
+check('packQtyOf：5片装 → 5', V.packQtyOf('灰色*5片装') === 5);
+check('packQtyOf：10片装 → 10', V.packQtyOf('灰色*10片装') === 10);
+check('packQtyOf：3件套 → 3', V.packQtyOf('三色3件套') === 3);
+check('packQtyOf：普通颜色 → 1', V.packQtyOf('灰色30cm*30cm') === 1);
+check('packQtyOf：尺码值 → 1（36-37 不是件数）', V.packQtyOf('36-37适合35-36码') === 1);
+check('packQtyOf：型号 → 1（3411 不是件数）', V.packQtyOf('白色【3411牛角】') === 1);
+check('packQtyOf：2件起批 → 1（起批数不是包装件数）', V.packQtyOf('2件起批') === 1);
+check('packQtyOf：一个值里写了多个不同件数 → 1（不猜）', V.packQtyOf('5片装/10片装') === 1);
+
+// 值名里的「N片装 / 深灰色 / 砖红色」要能出干净的英文（否则英文名里留中文被标黄）
+check('enOf：5片装 → 5-Piece Pack（不留中文）',
+  /5-Piece Pack/.test(V.enOf('灰色30cm*30cm*5片装')) && !V.hasCJK(V.enOf('灰色30cm*30cm*5片装')),
+  V.enOf('灰色30cm*30cm*5片装'));
+check('enOf：10片装 → 10-Piece Pack',
+  /10-Piece Pack/.test(V.enOf('深灰色30cm*30cm*10片装')) && !V.hasCJK(V.enOf('深灰色30cm*30cm*10片装')),
+  V.enOf('深灰色30cm*30cm*10片装'));
+check('enOf：砖红色 → Brick Red', /Brick Red/.test(V.enOf('砖红色30cm*30cm')), V.enOf('砖红色30cm*30cm'));
+check('enOf：咖啡色 → Coffee', /Coffee/.test(V.enOf('咖啡色30cm*30cm*5片装')), V.enOf('咖啡色30cm*30cm*5片装'));
+check('enOf：深绿/浅绿 → Dark/Light Green', /Dark Green/.test(V.enOf('深绿色')) && /Light Green/.test(V.enOf('浅绿色')),
+  `${V.enOf('深绿色')} / ${V.enOf('浅绿色')}`);
 
 // 真实规格行不被「混合装规格值上限」砍掉：15 个规格值就必须有 15 行原规格
 const many = { source: { offerId: '9999' }, specs: [{ label: '颜色',

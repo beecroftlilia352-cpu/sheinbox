@@ -271,6 +271,35 @@ async function aiPageChecks() {
   $('planMode').value = 'engine';
   $('planMode').dispatchEvent(new w.Event('change', { bubbles: true }));
   check('手动切回引擎规则 → 表格回到引擎产物', rows().length === engRows, rows().length + ' vs ' + engRows);
+
+  // ★ 值名自带件数（5片装/10片装）：AI 给的件数=5，成本必须是整包价 11.50（曾被再乘一遍 → 57.50）
+  const colExact = t => [...d.querySelectorAll('#thead th')].findIndex(th => th.textContent.trim() === t);
+  w.eval('PRODUCT.source={offerId:"4735"}; PRODUCT.specs=[{label:"颜色",values:[' +
+    '{name:"灰色30cm*30cm",code:null,price:2.12,stock:9},' +
+    '{name:"灰色30cm*30cm*5片装",code:null,price:11.5,stock:9},' +
+    '{name:"灰色30cm*30cm*10片装",code:null,price:23,stock:9}]}]; PRODUCT.colors=[]; onProduct(PRODUCT,"阶梯价测试");');
+  w.fetch = async () => ({ json: async () => ({ ok: true, model: 'deepseek-flash', elapsedSec: 4, notes: [], skipped: [],
+    rows: [
+      { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'Grey 30cm*30cm' },
+      { kind: '原规格', values: ['灰色30cm*30cm*5片装'], pcs: 5, accessory: false, nameEn: 'Grey 30cm*30cm 5-Piece Pack' },
+      { kind: '原规格', values: ['灰色30cm*30cm*10片装'], pcs: 10, accessory: false, nameEn: 'Grey 30cm*30cm 10-Piece Pack' }
+    ] }) });
+  $('btnAi').click();
+  await w.eval('new Promise(r => setTimeout(r, 40))');
+  const costCol2 = colExact('成本¥'), pcsCol2 = colExact('件数'), priceCol2 = colExact('定价¥');
+  const packIdx = rows().findIndex(tr => /5片装/.test(tr.children[2].textContent));
+  const tenIdx = rows().findIndex(tr => /10片装/.test(tr.children[2].textContent));
+  const cellTxt = (i, c) => (rows()[i] ? rows()[i].children[c].textContent.trim() : '');
+  check('阶梯价 + AI 计划：3 行都出（含 5片装 / 10片装）', rows().length === 3, rows().length + ' 行');
+  check('5片装行：件数 = 5', (rows()[packIdx] && rows()[packIdx].children[pcsCol2].querySelector('input').value) === '5',
+    rows()[packIdx] && rows()[packIdx].children[pcsCol2].querySelector('input').value);
+  check('5片装行：成本 = 11.50（不是 57.50/25 倍）', cellTxt(packIdx, costCol2) === '11.50', cellTxt(packIdx, costCol2));
+  check('5片装行：名字不再多叠一个「5支装」', !/5\s*支装/.test(cellTxt(packIdx, 2)), cellTxt(packIdx, 2));
+  check('10片装行：成本 = 23.00', cellTxt(tenIdx, costCol2) === '23.00', cellTxt(tenIdx, costCol2));
+  check('定价随整包价走：5片装 < 10片装，且都远小于错价时的数',
+    parseFloat(cellTxt(packIdx, priceCol2)) < parseFloat(cellTxt(tenIdx, priceCol2)) &&
+    parseFloat(cellTxt(packIdx, priceCol2)) < 30,
+    `${cellTxt(packIdx, priceCol2)} < ${cellTxt(tenIdx, priceCol2)}`);
 }
 
 (async () => {
