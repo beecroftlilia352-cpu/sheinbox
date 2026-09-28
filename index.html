@@ -36,6 +36,10 @@
   .fld{display:flex;flex-direction:column;gap:3px}
   .fld label{font-size:12px;color:var(--mut)}
   /* ③ 参数区：等宽网格 + 输入框统一底对齐（标签一行两行都不会让框子错位） */
+  /* 表格里的文字要能自由拖选复制（别被任何全局样式关上） */
+  #thead,#tbody{user-select:text;-webkit-user-select:text}
+  #thead th,#tbody td{user-select:text;-webkit-user-select:text}
+  #tbody button.copy{user-select:none;-webkit-user-select:none}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px 16px;align-items:end}
   .pgrid .fld{gap:6px;min-width:0}
   .pgrid .fld label{min-height:33px;display:flex;align-items:flex-end;line-height:1.35;font-size:12.5px}
@@ -605,7 +609,16 @@ function renderRows() {
     chk.onchange = () => { const sku = chk.dataset.acc; OV[sku] = Object.assign(OV[sku] || {}, { accessory: chk.checked }); regen(); };
     chk.onclick = e => e.stopPropagation();
   });
-  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { SEL = parseInt(tr.dataset.i, 10); renderRows(); });
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => {
+    // 以前这里是 SEL=...; renderRows(); —— 整张表重建，鼠标在格子里拖选一段文字一松手就被清空，
+    // 结果就是「列表内鼠标无法自由选择复制」。现在只搬 .sel 高亮 + 刷公式面板，DOM 一个字都不重建。
+    // 另外：已经选中了文字（用户正在复制）时，连高亮都不动，避免任何多余重排。
+    const sel = window.getSelection && window.getSelection();
+    if (sel && String(sel).length > 0) return;
+    SEL = parseInt(tr.dataset.i, 10) || 0;
+    tb.querySelectorAll('tr').forEach(x => x.classList.toggle('sel', x === tr));
+    renderFormula();
+  });
   const K = V.discountFactor(params());
   $('paramEcho').textContent = '折扣系数 K = ' + K.toFixed(4) +
     '（' + ($('stackMode').value === 'add' ? '相加' : '乘性') + '）；' +
@@ -628,6 +641,11 @@ function renderRows() {
     (fl.applied
       ? ' ｜ 低价兜底已触发：有 ' + fl.lowCount + ' 个规格原定价 < ¥' + fl.threshold + ' → 所有规格定价 +¥' + fl.add
       : (fl.enabled ? ' ｜ 低价兜底未触发（没有规格低于 ¥' + fl.threshold + '）' : ' ｜ 低价兜底已关闭')) + AI_NOTE;
+  renderFormula();
+}
+
+/* 只刷新「选中那一行的公式」面板（点行选中时用它，不再重建整张表） */
+function renderFormula() {
   if (!ROWS.length) $('formula').textContent = '还没有规格。先导入商品或手工填颜色。';
   else $('formula').textContent = ROWS[SEL].sku + '  ' + ROWS[SEL].nameCn + '\n' + V.formulaLines(ROWS[SEL], params()).join('\n');
 }

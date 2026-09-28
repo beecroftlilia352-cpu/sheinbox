@@ -338,6 +338,7 @@ async function aiPageChecks() {
   await browserBoxChecks();
   paramKeepChecks();
   await copyBtnChecks();
+  selectChecks();
   finish();
 })();
 
@@ -378,6 +379,26 @@ async function browserBoxChecks() {
   w.fetch = orig;
   $('status').textContent = origStatus;
   box.innerHTML = '';
+}
+
+/* 列表里要能用鼠标自由拖选复制（用户报：列表内鼠标无法自由选择复制）
+ * 病根：点行选中时调 renderRows() 重建整张表 —— 拖选文字一松手（click 触发）就被清空。 */
+function selectChecks() {
+  if (!rows().length) { check('列表拖选复制：需要有行才能测', false); return; }
+  const node0 = rows()[0], node1 = rows()[1];
+  node1.click();                                       // 点第二行（没有选中文字的正常点击）
+  check('点行选中：高亮跟到这一行', rows()[1].classList.contains('sel') && !rows()[0].classList.contains('sel'));
+  check('点行选中：DOM 不再重建（拖选来的文字不会被清掉）', rows()[0] === node0 && rows()[1] === node1);
+  check('点行选中：公式面板跟着刷成这一行', /YQ-/.test($('formula').textContent), $('formula').textContent.split('\n')[0]);
+
+  const formulaBefore = $('formula').textContent;
+  const orig = w.getSelection;
+  w.getSelection = () => ({ toString: () => '灰色30cm*30cm' });   // 假装鼠标正拖选着文字
+  node0.click();
+  check('已选中文字时点行：高亮与公式都不动（不打断你手上的选择）',
+    rows()[1].classList.contains('sel') && $('formula').textContent === formulaBefore);
+  w.getSelection = orig;
+  node0.click();                                        // 复位：选中第一行
 }
 
 /* 变种名后面那个「复制」按钮（用户要求：变种名列每个名字后面都加一个） */
