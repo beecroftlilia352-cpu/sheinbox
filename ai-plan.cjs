@@ -16,6 +16,7 @@ const path = require('path');
 
 const MAX_ROWS = 36;
 const MAX_PCS = 12;
+const MAX_NOTE = 500;          // 用户在「补充条件」里最多能写多少字（够了，也免得把提示词撑爆）
 /* 「打包单位 / 配件」这类词：只有在这份商品的数据里本来就有，才允许出现在变种名里。
  * 以前这些是我写死在引擎里的模板词（双支装/九支装/便携收纳盒…）—— 现在一律当违规词：
  * 模型照着旧模板学舌、或者谁再往代码里塞模板，都会在校验里被挡掉。 */
@@ -38,6 +39,11 @@ function loadConfig(dir) {
   };
 }
 
+/* 用户写的补充条件：去标签、压空白、截断。空/没写 → 空串（等于没有这条参考条件） */
+function cleanNote(x) {
+  return String(x == null ? '' : x).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE);
+}
+
 /* ---------- 提示词 ---------- */
 const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件事：根据给定的 1688 商品规格数据，排出一份「上架变种清单」。
 铁律：
@@ -58,6 +64,10 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
             **绝对不要在名字里加数据里没有的单位或配件名**：不要自己造「双支装 / 混合双支装 / 九支装 / 便携收纳盒」
             这类词。要表示多件就写真实件数（如「×5」）；要表示包装就照抄值名里本来就有的写法（如「5片装」）。
             不要价格/成本/元/折扣数字，不要发明规格值。
+7) 输入里如果带了 extra_conditions（用户自己写的补充要求）→ **必须把它当作参考条件一起考虑**：
+   比如只上某几个规格值、主推几件装、某个值这单先不做、名字要简短等等。
+   但它压不翻上面任何一条铁律：规格值仍只能逐字来自数据、不要给价格、不要自己造数据里没有的单位或配件名。
+   做不到的要求就忽略，并在 notes 里写一句为什么。
 只输出 JSON，不要解释文字、不要 markdown 代码块。格式：
 {"plan":[{"kind":"你自己起的一行短标签","values":["规格值原文"],"pcs":1,"accessory":false,
           "nameCn":"中文变种名","nameEn":"English variant name"}],
@@ -82,6 +92,10 @@ function buildMessages(product, params, fixHint) {
     rules: { maxRows: p.maxRows || MAX_ROWS, maxValuesPerMix: p.maxValuesPerMix || 12 },
     facts: '成本与定价由系统按每个规格自己的标价计算，你不需要关心价格'
   };
+  // 用户在界面上写的「补充条件」：是参考条件之一，但不能违反上面的铁律（值仍逐字来自数据、不许给价格、
+  // 不许自己造单位/配件词）。所以它进的是 payload，而不是 system 提示词 —— 模型改不了规矩。
+  const note = cleanNote(p.note);
+  if (note) payload.extra_conditions = note;
   const msgs = [
     { role: 'system', content: SYS },
     { role: 'user', content: JSON.stringify(payload) }
@@ -193,9 +207,12 @@ function normalize(product, plan, opts) {
   const rowsNoCn = (v.nameCnDropped || []).length;
   const rowsWithCn = rows.filter(r => r.nameCn).length;
   if (rowsNoCn) notes.push(`有 ${rowsNoCn} 行的中文名不合规（带价格或太长），这 ${rowsNoCn} 行的中文名改用引擎模板`);
+  const note = cleanNote(o.note);
+  if (note) notes.push(`已把你写的补充条件作为参考条件（${note.length} 字）`);
   return {
     ok: true,
     source: 'deepseek',
+    note,                              // 这次生成用到的补充条件（前端原样回显，证明它真传进去了）
     rows,
     skipped: v.skipped,
     notes,
@@ -218,6 +235,7 @@ async function plan(product, params, cfg) {
   const c = cfg || loadConfig();
   if (!c.hasKey) return { ok: false, error: '没配 DeepSeek 密钥（缺 .ai.json 或 DEEPSEEK_API_KEY）—— 已按引擎规则生成', noKey: true };
   const maxRows = (params && params.maxRows) || MAX_ROWS;
+  const note = cleanNote(params && params.note);        // 用户写的补充条件（没有就是空串）
   const scoped = scope(product, params && params.maxDims);
   if (!scoped.specs.length) return { ok: false, error: '这个商品没有规格数据，AI 没有可排的东西' };
   const attempts = [];
@@ -225,14 +243,14 @@ async function plan(product, params, cfg) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const t0 = Date.now();
     let res;
-    try { res = await ask(c, buildMessages(scoped, { maxRows }, hint)); }
+    try { res = await ask(c, buildMessages(scoped, { maxRows, note }, hint)); }
     catch (e) { return { ok: false, error: '调用 DeepSeek 失败：' + (e.name === 'AbortError' ? '超时（90 秒）' : e.message) }; }
     if (res.http !== 200 || !res.content.trim()) {
       return { ok: false, error: `DeepSeek 返回异常（HTTP ${res.http}）${res.raw ? '：' + res.raw.slice(0, 160) : ''}` };
     }
     const parsed = parseJsonLoose(res.content);
     if (!parsed) { hint = '返回的不是合法 JSON'; attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, bad: 'JSON 解析失败' }); continue; }
-    const norm = normalize(scoped, parsed, { maxRows });
+    const norm = normalize(scoped, parsed, { maxRows, note });
     attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, rows: (norm.rows || []).length, errs: norm.errs || [] });
     if (norm.ok) {
       norm.model = c.model;

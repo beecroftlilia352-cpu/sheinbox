@@ -133,8 +133,14 @@
         <option value="engine" selected>引擎规则（页面有几个规格值就几行，不编组合）</option>
         <option value="ai">DeepSeek 思考（挑组合 / 件数 / 中英文名）</option></select></div>
     </div>
-    <div class="row" style="margin-top:8px">
+    <div class="row" style="margin-top:8px;align-items:flex-start;flex-wrap:wrap">
       <button id="btnAi" class="ghost">让 DeepSeek 排一版变种</button>
+      <div class="fld" style="flex:1 1 320px;min-width:260px">
+        <label>给 DeepSeek 的补充条件（生成变种时一起参考，可不填）</label>
+        <textarea id="aiHint" rows="3" style="min-height:62px;font-family:inherit;font-size:13px"
+          placeholder="例：主推 2 件装和 4 件装，各色都上；只做深色系；名字尽量短；那个清仓随机款先不上架"></textarea>
+        <span class="hint" id="aiHintState"></span>
+      </div>
       <span class="hint">DeepSeek 只排「哪些规格值组合上架 + 件数 + 中英文变种名」；价格、成本、利润仍由这里的引擎算。它要是编了页面上没有的规格值，整份计划被打回、自动回落引擎规则；它要是自己造了包装单位/配件词（如「双支装」「便携收纳盒」），那一栏名会被丢掉落回成规格值原文。</span>
     </div>
     <div id="aiBox" class="hint" style="margin-top:6px"></div>
@@ -383,7 +389,8 @@ function regenInner(resetSel) {
     const cur = new Set(((prod.specs || [])).flatMap(d => (d.values || []).map(v => v.name)));
     const miss = AI_PLAN.rows.flatMap(r => (r.values || [])).filter(v => !cur.has(v));
     const base = ' ｜ 变种计划：DeepSeek 排的 ' + AI_PLAN.rows.length + ' 行' +
-      (AI_PLAN.model ? '（' + AI_PLAN.model + '）' : '');
+      (AI_PLAN.model ? '（' + AI_PLAN.model + '）' : '') +
+      (String(AI_PLAN.note || '').trim() ? '，已参考你的补充条件' : '');
     AI_NOTE = miss.length ? base + '，但规格被改过，' + miss.length + ' 个值已不在表里 → 建议重新排一版' : base;
   }
   const rows = V.buildVariants(prod, pp).map(r => {
@@ -405,6 +412,8 @@ function aiBoxHtml(j) {
   const n = ROWS.length || (j.rows || []).length;
   const cnUsed = ROWS.length ? ROWS.filter(r => r.aiCn).length
     : ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : 0);
+  const note = String(j.note || '').trim();
+  if (note) parts.push('· 这次生成参考了你的补充条件：<b>' + esc(note) + '</b>');
   parts.push('· 命名来源：中文名 <b>' + cnUsed + ' 行来自 DeepSeek</b>' +
     (n - cnUsed > 0 ? '、' + (n - cnUsed) + ' 行用了引擎模板（模型没给、或给了不合规的名）' : '') +
     '；英文名 ' + n + ' 行来自 DeepSeek；价格/成本仍是本地引擎算');
@@ -425,7 +434,10 @@ async function aiPlanNow() {
   try {
     const r = await fetch('/api/ai-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product: PRODUCT, params: { maxDims: maxDimsNow(), maxRows: p.maxVariants } })
+      body: JSON.stringify({ product: PRODUCT, params: {
+        maxDims: maxDimsNow(), maxRows: p.maxVariants,
+        note: ($('aiHint') ? $('aiHint').value : '')          // 补充条件：跟规格数据一起发给 DeepSeek 当参考条件
+      } })
     });
     const j = await r.json().catch(() => ({}));
     if (!j.ok) {
@@ -438,6 +450,7 @@ async function aiPlanNow() {
     }
     AI_PLAN = j; OV = {};
     AI_NOTE = ' ｜ 变种计划：DeepSeek 排的 ' + (j.rows || []).length + ' 行（' + (j.model || 'deepseek') + '，' + (j.elapsedSec || 0) + 's）'
+      + (String(j.note || '').trim() ? '，已参考补充条件' : '')
       + '；命名：中文 ' + ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : (j.rows || []).length) + '/' + (j.rows || []).length + ' 行来自 DeepSeek'
       + '，英文全部来自 DeepSeek';
     $('aiBox').innerHTML = '';
@@ -671,7 +684,7 @@ $('btnFormulas').onclick = () => {
   const out = ['SHEIN 选品定价台 —— 全部变种公式与定价',
     '商品：' + ((PRODUCT && PRODUCT.title) || '—'),
     '链接：' + ((PRODUCT && PRODUCT.source && PRODUCT.source.url) || '—'),
-    '参数：' + JSON.stringify(params()),
+    '参数：' + JSON.stringify(params()) + (($('aiHint') && $('aiHint').value.trim()) ? ' ｜ 补充条件：' + $('aiHint').value.trim() : ''),
     '变种计划来源：' + (AI_PLAN ? ('DeepSeek ' + (AI_PLAN.model || '') + '（' + (AI_PLAN.rows || []).length + ' 行' +
       ((AI_PLAN.skipped || []).length ? '，跳过 ' + AI_PLAN.skipped.map(s => s.value).join('、') : '') + '）') : '引擎规则'),
     '命名来源：' + (AI_PLAN
@@ -688,6 +701,24 @@ $('btnRegen').onclick = () => {
   OV = {}; regen(true); setStatus('ready', '已按当前参数重新生成规格。');
 };
 $('btnAi').onclick = () => { if ($('planMode')) $('planMode').value = 'ai'; aiPlanNow(); };
+
+/* 补充条件文本框：① 存本地（刷新、换商品都不丢）② 改了要重排一版才生效（它跟规格数据一起发给 DeepSeek）。
+ * 只在 DeepSeek 档生效 —— 引擎档不联网，没有"参考条件"这回事，所以这里明说，免得用户以为填了就管用。 */
+const AI_HINT_KEY = 'shein-listing:aiHint';
+try { const v = localStorage.getItem(AI_HINT_KEY); if (v && $('aiHint')) $('aiHint').value = v; } catch (e) { /* 无 localStorage（file:// 等）就跳过 */ }
+if ($('aiHint')) {
+  const paintHint = () => {
+    const v = $('aiHint').value.trim();
+    if (!v) { $('aiHintState').textContent = '不填也行。只在 DeepSeek 档生效（引擎档不联网，不看这里）。'; return; }
+    $('aiHintState').textContent = '已填 ' + v.length + ' 字 —— 点「让 DeepSeek 排一版变种」才会用它重排一版。';
+  };
+  $('aiHint').addEventListener('input', () => {
+    try { localStorage.setItem(AI_HINT_KEY, $('aiHint').value); } catch (e) {}
+    paintHint();
+  });
+  paintHint();
+}
+
 $('planMode').addEventListener('change', () => {
   if ($('planMode').value === 'ai') { if (PRODUCT) aiPlanNow(); else setStatus('error', '还没有商品：先「读取商品」，再让 DeepSeek 排变种。'); return; }
   AI_PLAN = null; AI_NOTE = ' ｜ 变种计划：引擎规则'; $('aiBox').innerHTML = ''; OV = {}; regen(true);

@@ -241,11 +241,19 @@ async function aiPageChecks() {
   check('参数区有「变种计划怎么排」且默认是引擎规则',
     !!$('planMode') && $('planMode').value === 'engine', $('planMode') && $('planMode').value);
   check('参数区有「让 DeepSeek 排一版变种」按钮', !!$('btnAi'));
+  check('按钮右侧有「给 DeepSeek 的补充条件」文本框', !!$('aiHint') && $('aiHint').tagName === 'TEXTAREA',
+    $('aiHint') ? $('aiHint').tagName : '缺失');
+  check('补充条件框旁边写明只在 DeepSeek 档生效', /DeepSeek/.test($('aiHintState').textContent), $('aiHintState').textContent.slice(0, 50));
+  $('aiHint').value = '主推 2 件装；只上深色系';
+  $('aiHint').dispatchEvent(new w.Event('input', { bubbles: true }));
+  check('填了补充条件 → 提示「点按钮才会用它重排一版」',
+    /13 字/.test($('aiHintState').textContent) && /重排/.test($('aiHintState').textContent),
+    $('aiHintState').textContent.slice(0, 60));
   const colOf = re => [...d.querySelectorAll('#thead th')].findIndex(th => re.test(th.textContent));
   const enCol = colOf(/Variant Name/), priceCol = colOf(/定价/);
   check('表头里找得到「定价」列', priceCol > 0, '列号 ' + priceCol);
   const engRows = rows().length;
-  const plan = { ok: true, model: 'deepseek-flash', elapsedSec: 4.4, notes: ['先原规格再组合'],
+  const plan = { ok: true, model: 'deepseek-flash', elapsedSec: 4.4, note: '主推 2 件装；只上深色系', notes: ['先原规格再组合'],
     skipped: [{ value: '【清仓随机款，尺码可指定】', reason: '随机款颜色不确定' }],
     rows: [
       { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameEn: 'White 3411 Horn' },
@@ -256,6 +264,8 @@ async function aiPageChecks() {
   $('btnAi').click();
   await w.eval('new Promise(r => setTimeout(r, 40))');       // 等 aiPlanNow 里的 await 走完
   check('点按钮就把规格数据发给了 /api/ai-plan', !!asked && asked.u === '/api/ai-plan', asked && asked.u);
+  check('补充条件跟着规格数据一起发过去了（note）',
+    !!asked && asked.body.params.note === '主推 2 件装；只上深色系', JSON.stringify(asked && asked.body.params));
   check('请求里带上「显示中的规格级数」（跟着参数区那个上限）',
     !!asked && asked.body.params.maxDims === parseInt($('maxDims').value, 10),
     JSON.stringify(asked && asked.body.params) + ' vs 上限 ' + $('maxDims').value);
@@ -267,6 +277,9 @@ async function aiPageChecks() {
   check('中文变种名那一栏写明「几行来自 DeepSeek / 几行回落模板」（按表里真实行数）',
     /命名来源/.test($('aiBox').textContent) && /0 行来自 DeepSeek/.test($('aiBox').textContent),
     $('aiBox').textContent.slice(0, 90));
+  check('④ 区回显这次用到的补充条件（证明真传进去了）',
+    /补充条件/.test($('aiBox').textContent) && /只上深色系/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 120));
+  check('④ 区标题那行也标明「已参考补充条件」', /已参考你的补充条件/.test($('rowHint').textContent), $('rowHint').textContent.slice(-60));
   check('定价仍是本地引擎算的（不是 AI 给的数）', parseFloat(cell(0, priceCol)) > 0, cell(0, priceCol));
 
   w.fetch = async () => ({ json: async () => ({ ok: false, error: 'HTTP 429 太频繁' }) });
