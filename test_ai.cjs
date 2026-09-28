@@ -28,10 +28,17 @@ const sentValues = payload.product.specs.flatMap(d => d.values.map(v => v.name))
 check('提示词里 4 个规格值全都在', sentValues.length === 4, sentValues.join(' / '));
 check('提示词明确「不要给价格/成本数字」', /不要给任何价格/.test(msgs[0].content));
 check('提示词要求逐字复制规格值', /逐字复制/.test(msgs[0].content));
-check('提示词带上 kinds / maxRows', payload.rules.kinds.length === 4 && payload.rules.maxRows === 30);
+check('提示词带上 maxRows，且不再规定任何组合类别（kinds 白名单已删）',
+  payload.rules.maxRows === 30 && payload.rules.kinds === undefined, JSON.stringify(payload.rules));
+check('提示词明说 kind 由模型自己起短标签（引擎不规定类别）', /你自己给这一行起/.test(msgs[0].content));
+check('提示词明令不许自己造单位/配件词（双支装/收纳盒这类）',
+  /绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content), '没写这条规矩');
 check('提示词里没有密钥、也没有要求它算钱', !/apiKey|sk-/.test(msgs[1].content));
 check('提示词要模型写中文变种名（nameCn）与英文名（nameEn）', /nameCn/.test(msgs[0].content) && /nameEn/.test(msgs[0].content));
 check('提示词明确中文名不许带价格/成本', /不要价格\/成本/.test(msgs[0].content));
+check('提示词的范本里不再出现我旧模板的词（双支装/混合装/收纳盒）',
+  !/双支装|混合双支装|三支装|九支装|收纳盒/.test(msgs[0].content.replace(/不要自己造[^。]*。/, '')) ||
+  /不要自己造/.test(msgs[0].content), '提示词还在教它写旧模板词');
 
 /* 2) 只把「表格显示的那几级」给它：藏起来的维度不进计划（否则行会撞车） */
 const scoped = A.scope(prod, 1);
@@ -76,7 +83,14 @@ check('塞进来的价格/成本字段被剥掉（钱只由引擎算）',
 /* 7) 件数越界 / kind 不认 / 空计划 → 拒绝 */
 check('件数 13 → 拒绝', !A.normalize(prod, { plan: [{ kind: '原规格', values: ['灰色30cm*30cm'], pcs: 13, nameEn: 'X' }] }).ok);
 check('件数 0 → 拒绝', !A.normalize(prod, { plan: [{ kind: '原规格', values: ['灰色30cm*30cm'], pcs: 0, nameEn: 'X' }] }).ok);
-check('kind 不认识 → 拒绝', !A.normalize(prod, { plan: [{ kind: '随便装', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'X' }] }).ok);
+check('kind 随便起（引擎不再有类别白名单）→ 放行', A.normalize(prod, { plan: [
+  { kind: '随便什么标签', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey' },
+  { kind: '另一个', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White' },
+  { kind: '', values: ['36-37适合35-36码'], pcs: 1, nameEn: 'Size' },
+  { kind: 'x', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Random' }
+] }).ok === true);
+check('kind 里塞价格/成本 → 拒绝', !A.normalize(prod, { plan: [
+  { kind: '¥2.3 一支', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey' }] }).ok);
 check('没有英文名 → 拒绝', !A.normalize(prod, { plan: [{ kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameEn: '' }] }).ok);
 check('不是 JSON 对象 → 拒绝', !A.normalize(prod, null).ok);
 
@@ -100,20 +114,54 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   check('能从一段解释文字里抠出 JSON', !!A.parseJsonLoose('好的，这是计划：{"plan":[]} 以上。'));
   check('不是 JSON 就返回 null', A.parseJsonLoose('我不知道') === null);
 
-  /* 11) 中文变种名：模型写就用模型的；带价格/超长的丢掉那一栏（回落引擎模板），并如实报数 */
+  /* 11) 中文变种名：模型写就用模型的；带价格 / 编造单位配件词的丢掉那一栏（回落成值原文），并如实报数 */
   const withCn = { plan: [
-    { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰色30cm*30cm 单支装', nameEn: 'Grey 30cm*30cm - 1 Pack' },
-    { kind: '组合装', values: ['灰色30cm*30cm', '白色30cm*30cm'], pcs: 2, nameCn: '灰白两色各一支 双片装', nameEn: 'Grey + White - 2 Pack' },
-    { kind: '带配件', values: ['36-37适合35-36码'], pcs: 1, nameCn: '尺码 36-37 单支 + 便携收纳盒', nameEn: 'Size 36-37 with Case' },
-    { kind: '原规格', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款 只要 ¥2.3 一支', nameEn: 'Random Clearance - 1 Pack' }
+    { kind: '单品', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰色30cm*30cm 单片', nameEn: 'Grey 30cm*30cm' },
+    { kind: '两组', values: ['灰色30cm*30cm', '白色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm + 白色30cm*30cm ×2', nameEn: 'Grey 30cm*30cm + White 30cm*30cm x2' },
+    { kind: '主推', values: ['36-37适合35-36码'], pcs: 1, nameCn: '36-37适合35-36码 主推', nameEn: 'Size 36-37' },
+    { kind: '单品', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款 只要 ¥2.3 一支', nameEn: 'Random' }
   ] };
   const cn = A.normalize(prod, withCn, { maxRows: 20 });
-  check('中文名照搬模型写的', cn.ok && cn.rows[0].nameCn === '灰色30cm*30cm 单支装', cn.rows && cn.rows[0].nameCn);
-  check('混装行也照搬模型的中文名（不强行套模板）', cn.ok && /两色各一支/.test(cn.rows[1].nameCn), cn.rows && cn.rows[1].nameCn);
-  check('带价格的中文名被丢掉 → 那一栏留空，回落引擎模板', cn.ok && cn.rows[3].nameCn === null, cn.rows && cn.rows[3].nameCn);
+  check('中文名照搬模型写的', cn.ok && cn.rows[0].nameCn === '灰色30cm*30cm 单片', cn.rows && cn.rows[0].nameCn);
+  check('多值行也照搬模型的中文名（不强行套引擎模板）', cn.ok && /×2/.test(cn.rows[1].nameCn), cn.rows && cn.rows[1].nameCn);
+  check('带价格的中文名被丢掉 → 那一栏留空（回落成值原文）', cn.ok && cn.rows[3].nameCn === null, cn.rows && cn.rows[3].nameCn);
   check('如实报数：几行用了模型名、几行丢掉了', cn.ok && cn.nameCnUsed === 3 && cn.nameCnDropped === 1,
     JSON.stringify({ used: cn.nameCnUsed, dropped: cn.nameCnDropped }));
-  check('说明里写清「有行回落引擎模板」', cn.ok && (cn.notes || []).some(x => /中文名不合规/.test(x)), (cn.notes || []).join(' / '));
+  check('说明里写清「有行中文名不合规」', cn.ok && (cn.notes || []).some(x => /中文名不合规/.test(x)), (cn.notes || []).join(' / '));
+
+  /* 11b) 名字里自己造单位/配件词 → 那一栏丢掉。这是用户明确要求的一条：
+   *      「不许给我写死任何单位和组合」—— 引擎不写死，也不许模型学着旧模板写。 */
+  const inventUnits = { plan: [
+    { kind: 'x', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰色30cm*30cm 单支装', nameEn: 'Grey' },
+    { kind: 'x', values: ['白色30cm*30cm'], pcs: 1, nameCn: '白色30cm*30cm 混合双支装 组合装', nameEn: 'White' },
+    { kind: 'x', values: ['36-37适合35-36码'], pcs: 1, nameCn: '36-37适合35-36码 便携收纳盒 + 带配件', nameEn: 'Size 36-37' },
+    { kind: 'x', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款 九支装（多件折扣）', nameEn: 'Random' }
+  ] };
+  const iu = A.normalize(prod, inventUnits, {});
+  check('名字里造单位/组合词（单支装/混合双支装/收纳盒/九支装）→ 那一栏全丢',
+    iu.ok && iu.rows.every(r => r.nameCn === null) && iu.nameCnDropped === 4,
+    iu.ok ? JSON.stringify(iu.rows.map(r => r.nameCn)) : iu.error);
+  check('丢的只是那一栏，行本身还在', iu.ok && iu.rows.length === 4);
+
+  const packProd = { title: '拼接地板', specs: [{ label: '规格', values: [
+    { name: '灰色30cm*30cm*5片装', code: null, price: 11.5, stock: 9 }] }] };
+  const legit = A.normalize(packProd, { plan: [{ kind: 'x', values: ['灰色30cm*30cm*5片装'], pcs: 5,
+    nameCn: '灰色30cm*30cm*5片装 ×5', nameEn: 'Grey 30cm*30cm 5-Piece Pack' }] }, {});
+  check('值名里本来就有的包装写法（5片装）不算编造 → 放行',
+    legit.ok && legit.rows[0].nameCn === '灰色30cm*30cm*5片装 ×5', legit.ok ? String(legit.rows[0].nameCn) : legit.error);
+  const echo = A.normalize(packProd, { plan: [{ kind: 'x', values: ['灰色30cm*30cm*5片装'], pcs: 5,
+    nameCn: '灰色30cm*30cm*5片装 五片装', nameEn: 'Grey' }] }, {});
+  check('模型自己补的「五片装」不在数据里 → 那一栏丢掉',
+    echo.ok && echo.rows[0].nameCn === null, echo.ok ? String(echo.rows[0].nameCn) : echo.error);
+  const leakCase = A.normalize(prod, { plan: [
+    { kind: 'x', values: ['灰色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm ×2', nameEn: 'Grey with Case' },
+    { kind: 'x', values: ['白色30cm*30cm'], pcs: 1, nameCn: '白色30cm*30cm', nameEn: 'White' },
+    { kind: 'x', values: ['36-37适合35-36码'], pcs: 1, nameCn: '36-37适合35-36码', nameEn: 'Size 36-37' },
+    { kind: 'x', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款', nameEn: 'Random' }
+  ] }, {});
+  check('英文名硬说带配件但没标配件 → 那句被去掉',
+    leakCase.ok && leakCase.rows[0].nameEn === 'Grey' && leakCase.rows[0].accessory === false,
+    leakCase.ok ? leakCase.rows[0].nameEn : leakCase.error);
 
   const longCn = { plan: [
     { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰'.repeat(60), nameEn: 'Grey' },

@@ -42,21 +42,28 @@ check('凑整欧元价以 .99 结尾', /\.99$/.test(withCase.priceEur99.toFixed(
 
 // 5) 用真实商品数据生成规格
 const rows = V.buildVariants(prod, { unitCost: prod.suggestedUnitCost });
-check('变种数 ≥6', rows.length >= 6, `实际 ${rows.length} 个`);
-check('保留原规格 3 个（粉色/绿色/紫色 单支）',
-  rows.filter(r => r.kind === '原规格').length === 3,
-  rows.filter(r => r.kind === '原规格').map(r => r.nameCn).join('、'));
-check('含混合规格组合装（名字按真实规格值写，不用「混色」模板词）', rows.some(r => r.kind === '组合装'));
-check('含带配件变种', rows.some(r => r.accessory));
+check('行数 = 页面规格值数（3 个颜色 → 3 行），不再凭空多出组合行', rows.length === 3, `实际 ${rows.length} 行`);
+check('每个值一行、都是页面上的原文',
+  rows.map(r => r.nameCn).join('、') === '粉色、绿色、紫色', rows.map(r => r.nameCn).join('、'));
+/* 用户原话：「不许给我写死任何单位和组合」。下面这条就是那句话的看门测试：
+ * 引擎档输出的名字里只允许出现页面抓到的值原文（+ 子规格原文），一个自己编的词都不许有。 */
+const UNIT_WORDS = /支装|片装装|收纳盒|囤货|多件折扣|混合装|款规格|组合装|套装|单支|Pack|Specs|with Case/i;
+const valueTexts = (prod.specs || []).flatMap(d => d.values.map(v => v.name));
+check('引擎输出的名字里只有页面上的值原文（没有任何我编的单位/组合词）',
+  rows.every(r => !UNIT_WORDS.test(r.nameCn) && !/with Case|Specs/i.test(r.nameEn)),
+  rows.map(r => r.nameCn + ' | ' + r.nameEn).join(' ;; '));
+check('也不含页面数据里没有的字', rows.every(r => valueTexts.some(v => r.nameCn.includes(v))), rows.map(r => r.nameCn).join('、'));
+check('没有配件款（引擎不再自己发明「带收纳盒」）', rows.every(r => r.accessory === false));
+check('没有多件装（件数一律等于值名自带的件数）', rows.every(r => r.pcs === V.packQtyOf(r.nameCn)));
 check('SKU 全部唯一', new Set(rows.map(r => r.sku)).size === rows.length);
 check('英文变种名齐全且无中文', rows.every(r => r.nameEn && !/[\u4e00-\u9fa5]/.test(r.nameEn)),
   rows.map(r => r.nameEn).join(' | '));
 check('每个变种都有定价', rows.every(r => r.pricing.ok && r.pricing.price > 0));
 check('拿货价取自页面规格标价 0.34', rows[0].pricing.goods === 0.34, String(rows[0].pricing.goods));
 
-// 6) 单色商品也要能凑出 ≥6 个变种（兜底）
+// 6) 单色商品：就只有那一行（引擎不靠编组合凑数）
 const mono = V.buildVariants({ colors: [{ name: '粉色', code: 'C1Y1P' }] }, {});
-check('单色商品仍生成 ≥6 个变种', mono.length >= 6, `实际 ${mono.length} 个`);
+check('单色商品 → 1 行，名字就是值原文', mono.length === 1 && mono[0].nameCn === '粉色', `${mono.length} 行：${mono.map(r => r.nameCn).join(',')}`);
 
 // 7) 无解必须被标记而不是给负数/NaN
 const dead = V.priceVariant({ pcs: 1 }, { margin: 80, marginBase: 'list' });
@@ -78,10 +85,14 @@ check('低价兜底：低于阈值的规格数 = 实测条数', cheap[0].floor.l
 check('低价兜底：每个规格都 +3（整单统一，不是只加触发那一行）',
   cheap.every(r => Math.abs(r.pricing.price - (r.pricing.priceSolved + 3)) < 1e-9),
   cheap.map(r => r.pricing.priceSolved.toFixed(2) + '→' + r.pricing.price.toFixed(2)).join(' '));
+// 兜底是「整单统一」的：一个便宜值触发后，贵的那行也要 +3（配一个自带件数的贵值来验）
+const cheapMix = V.buildVariants({ source: { offerId: '8888' }, specs: [{ label: '规格', values: [
+  { name: '灰色30cm*30cm', code: null, price: 0.34, stock: 1 },
+  { name: '灰色*5片装', code: null, price: 11.5, stock: 1 }] }] }, { unitCost: 0.34 });
 check('低价兜底：高于阈值的规格也照样 +3，且原解保留在 priceSolved',
-  cheap.filter(r => r.pricing.priceSolved >= 3).length > 0 &&
-  cheap.every(r => Number.isFinite(r.pricing.priceSolved) && Math.abs(r.pricing.price - r.pricing.priceSolved - 3) < 1e-9),
-  `高于阈值的 ${cheap.filter(r => r.pricing.priceSolved >= 3).length} 个规格也加了 3`);
+  cheapMix[0].floor.applied === true && cheapMix.filter(r => r.pricing.priceSolved >= 3).length > 0 &&
+  cheapMix.every(r => Number.isFinite(r.pricing.priceSolved) && Math.abs(r.pricing.price - r.pricing.priceSolved - 3) < 1e-9),
+  `高于阈值的 ${cheapMix.filter(r => r.pricing.priceSolved >= 3).length} 个规格也加了 3`);
 check('低价兜底：到手价按兜底后定价重算',
   cheap.every(r => Math.abs(r.pricing.net - r.pricing.factor * r.pricing.price) < 1e-9),
   `首行 net=${cheap[0].pricing.net.toFixed(4)}`);
@@ -106,15 +117,14 @@ check('无编码两色：原规格 SKU 按页面顺序编 S1/S2（不再全撞�
   nc.slice(0, 2).every((r, i) => r.sku === `YQ-1078-S${i + 1}-1P`), JSON.stringify(nc.slice(0, 2).map(r => r.sku)));
 check('无编码两色：颜色规格列不写假编码', nc.slice(0, 2).every((r, i) => r.colorSpec === ['肤色', '黑色'][i]),
   JSON.stringify(nc.slice(0, 2).map(r => r.colorSpec)));
-check('无编码两色：名字按真实规格值写（肤色+黑色 九支装）',
-  nc.some(r => r.nameCn === '肤色+黑色 九支装（多件折扣）') && nc.some(r => r.nameCn === '肤色+黑色 三支 + 收纳盒'),
-  JSON.stringify(nc.map(r => r.nameCn)));
+check('无编码两色：名字就是两个值原文，没有我编的单位/组合',
+  nc.map(r => r.nameCn).join('、') === '肤色、黑色', JSON.stringify(nc.map(r => r.nameCn)));
 check('无编码两色：不再出现「三色」或「混色」字样', nc.every(r => !/混色/.test(r.nameCn + r.nameEn)),
   JSON.stringify(nc.filter(r => /三色/.test(r.nameCn + r.nameEn)).map(r => r.nameCn)));
 // 三色有编码的商品：命名与 SKU 保持原样（不能被上面的改动带偏）
 const tri = V.buildVariants(prod, { unitCost: 0.34 });
-check('有编码三色：变种名按真实规格值写（3 款规格混合装 九支装）', tri.some(r => r.nameCn === '3 款规格混合装 九支装（多件折扣）'),
-  JSON.stringify(tri.map(r => r.nameCn).slice(0, 8)));
+check('有编码三色：每行就是值原文（3 行）', tri.length === 3 && tri.map(r => r.nameCn).join('、') === '粉色、绿色、紫色',
+  JSON.stringify(tri.map(r => r.nameCn)));
 check('有编码三色：SKU 仍用页面编码', tri[0].sku === 'YQ-2516-C1Y1P-1P' && tri[2].sku === 'YQ-2516-C1Y1R-1P',
   JSON.stringify(tri.slice(0, 3).map(r => r.sku)));
 check('有编码三色：SKU 唯一', new Set(tri.map(r => r.sku)).size === tri.length);
@@ -126,19 +136,21 @@ const twoDim = { source: { offerId: '123456789012' }, specs: [
 const td = V.buildVariants(twoDim, { unitCost: 12.8 });
 check('两级规格：维度原样传出（颜色 + 尺码）', td.dims.map(d => d.label).join(',') === '颜色,尺码',
   JSON.stringify(td.dims.map(d => d.label)));
-check('两级规格：行数 = 9 行计划 × 3 个尺码', td.length === 27, `${td.length} 行`);
+check('两级规格：行数 = 2 个颜色 × 3 个尺码 = 6 行（不再乘上一套编好的组合）', td.length === 6, `${td.length} 行`);
 check('两级规格：SKU 唯一', new Set(td.map(r => r.sku)).size === td.length, `${td.length} 行`);
 check('两级规格：SKU 同时带父/子编码（真实规格行排在最前）',
   td[0].sku === 'YQ-9012-C10Y1-S1Y1-1P' && td[2].sku === 'YQ-9012-C10Y1-S1Y2-1P',
   td.slice(0, 3).map(r => r.sku).join(' '));
 check('两级规格：每行都有两维的确定值（不空着）',
   td.every(r => r.spec && r.spec['颜色'] && r.spec['尺码']), JSON.stringify(td[0].spec));
-check('两级规格：英文名带上子规格', td[0].nameEn === 'Black S - 1 Pack' &&
-  (td.find(r => r.sku.endsWith('-2P')) || {}).nameEn === 'Black S - 2 Pack',
-  [td[0].nameEn, (td.find(r => r.sku.endsWith('-2P')) || {}).nameEn].join(' / '));
-check('两级规格：组合太多时封顶并标注',
-  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 12 }).length === 12 &&
-  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 12 })[11].truncated.total === 27);
+check('两级规格：英文名 = 值原文翻译 + 子规格，不带编出来的包装词',
+  td.map(r => r.nameEn).join(',') === 'Black S,White S,Black M,White M,Black L,White L',
+  td.map(r => r.nameEn).join(','));
+check('两级规格：中文名 = 值原文 ｜子规格原文',
+  td[0].nameCn === '黑色｜S', td[0].nameCn);
+check('两级规格：封顶生效并标注本来有多少行',
+  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 4 }).length === 4 &&
+  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 4 })[3].truncated.total === 6);
 
 // ── 9 个组合值规格（用户实际那个卷发棒页）：规格格子拆父/子两列，SKU/名字全来自页面数据 ──
 const curlV = V.buildVariants({
@@ -159,7 +171,8 @@ check('卷发棒：规格格子拆成 父规格 + 子规格（不写死「颜色
 check('卷发棒：SKU 用页面顺序 S1..S5 + 包装后缀', curlV[0].sku === 'YQ-6330-S1-1P', JSON.stringify(curlV.slice(0, 3).map(r => r.sku)));
 check('卷发棒：SKU 全部唯一', new Set(curlV.map(r => r.sku)).size === curlV.length,
   JSON.stringify(curlV.map(r => r.sku)));
-check('卷发棒：中文名 = 页面规格值 + 包装', curlV[0].nameCn === '【英文版.欧规】紫色全自动32mm单支（原规格）', curlV[0].nameCn);
+check('卷发棒：中文名 = 页面规格值原文（不加任何我编的东西）',
+  curlV[0].nameCn === '【英文版.欧规】紫色全自动32mm', curlV[0].nameCn);
 check('卷发棒：英文名把已知词换成英文（EU/Purple/Automatic）',
   /EU/.test(curlV[0].nameEn) && /Purple/.test(curlV[0].nameEn) && /Automatic 32mm/.test(curlV[0].nameEn),
   curlV[0].nameEn);
@@ -204,10 +217,22 @@ check('阶梯价：5片装行用 11.5',
   t(costOf(r => r.kind === '原规格' && /5片装/.test(r.nameCn)), 11.5), costOf(r => r.kind === '原规格' && /5片装/.test(r.nameCn)));
 check('阶梯价：10片装行用 23',
   t(costOf(r => r.kind === '原规格' && /10片装/.test(r.nameCn)), 23), costOf(r => r.kind === '原规格' && /10片装/.test(r.nameCn)));
-check('阶梯价：两种规格各一支 → 成本 = 两个价相加 4.33',
-  t(costOf(r => /混合双支装/.test(r.nameCn)), 4.33), costOf(r => /混合双支装/.test(r.nameCn)));
-check('阶梯价：六支装件数说不清 → 回落到参数拿货价 5×6=30',
-  t(costOf(r => /六支装/.test(r.nameCn)), 30), costOf(r => /六支装/.test(r.nameCn)));
+// 引擎档不会自己排出「一行两个值」「一个值卖多件」这种行 —— 只有 AI 档才可能排。
+// 这类行的成本口径仍要正确，所以用一份 AI 计划去验（不是靠引擎编组合）。
+const mixPlan = { rows: [
+  { kind: '混搭', values: ['灰色30cm*30cm', '咖啡色30cm*30cm'], pcs: 2, accessory: false,
+    nameCn: '灰色30cm*30cm + 咖啡色30cm*30cm ×2', nameEn: 'Grey 30cm*30cm + Coffee 30cm*30cm x2' },
+  { kind: '多件', values: ['灰色*5片装'], pcs: 5, accessory: false,
+    nameCn: '灰色*5片装', nameEn: 'Grey 5-Piece Pack' }
+] };
+const lm = V.buildVariants(ladder, { unitCost: 5, maxVariants: 40, aiPlan: mixPlan });
+check('引擎档没有组合行（没有 AI 计划时只有 4 个真实规格行）', lv.length === 4, `${lv.length} 行`);
+check('AI 档：一行用两个规格值 → 成本 = 各自标价相加 2.12+2.21 = 4.33',
+  t(lm.find(r => /\+/.test(r.nameCn)).pricing.baseCost, 4.33),
+  JSON.stringify(lm.map(r => [r.nameCn, (r.pricing || {}).baseCost])));
+check('AI 档：值自带件数（5片装）→ 用整包标价 11.5，不用参数里的 5',
+  t(lm.find(r => /5片装/.test(r.nameCn)).pricing.baseCost, 11.5),
+  JSON.stringify(lm.map(r => [r.nameCn, (r.pricing || {}).baseCost])));
 const lp = V.buildVariants(ladder, { unitCost: 5, maxVariants: 40, costMode: 'param' });
 check('切成「统一拿货价」时 5片装行也用参数值（5 元/件 × 5 件 = 25）',
   Math.abs((((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost) - 25) < 1e-9,
@@ -225,9 +250,9 @@ check('5片装行：SKU 件数段是 -5P', /-5P$/.test(packRow.sku || ''), packR
 const tenRow = lv.find(r => r.kind === '原规格' && /10片装/.test(r.nameCn)) || {};
 check('10片装行：件数 10、成本 23', tenRow.pcs === 10 && t((tenRow.pricing || {}).baseCost, 23),
   `${tenRow.pcs} 件 / ${(tenRow.pricing || {}).baseCost}`);
-check('包装组合行（双支/囤货）不再拿「5片装」去拼（否则会算出半包）',
-  !lv.some(r => r.kind !== '原规格' && /片装/.test(r.nameCn)),
-  lv.filter(r => r.kind !== '原规格' && /片装/.test(r.nameCn)).map(r => r.nameCn).slice(0, 3).join(' | '));
+check('引擎档的名字就是值原文（自造词一个都没有）',
+  lv.every(r => !UNIT_WORDS.test(r.nameCn)) && lv.map(r => r.nameCn).join('|') === '灰色30cm*30cm|咖啡色30cm*30cm|灰色*5片装|灰色*10片装',
+  lv.map(r => r.nameCn).join(' | '));
 
 // packQtyOf：只认「值名里明确写了件数」，说不清就不猜
 check('packQtyOf：5片装 → 5', V.packQtyOf('灰色*5片装') === 5);
@@ -286,20 +311,24 @@ const guard = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: { rows: [
 check('AI 行里的值在表里找不到 → 该行被丢掉（第二道保险）',
   guard.length === 1 && guard[0].nameEn === 'White', guard.map(r => r.nameEn).join(','));
 
-/* AI 写的中文名：用它的；它没写 → 引擎模板；带配件它忘了点出配件 → 补上。
- * （用户问过「这尾巴的变种名是被你写死了吗」—— 所以「谁写的」这件事要有测试盯着） */
+/* AI 写的中文名：用它的；它没写 → 回落成**值原文**（不是模板）。
+ * 用户原话「这尾巴的变种名是被你写死了吗」「不许给我写死任何单位和组合」——
+ * 所以「名字是谁写的」和「引擎会不会偷偷补词」这两件事都要有测试盯着。 */
 const aiPlanCn = { rows: [
-  { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameCn: '白色牛角款 单支装', nameEn: 'White Horn - 1 Pack' },
-  { kind: '原规格', values: ['粉红【3411牛角】'], pcs: 1, accessory: false, nameEn: 'Pink Horn - 1 Pack' },
-  { kind: '带配件', values: ['白色【3411牛角】'], pcs: 1, accessory: true, nameCn: '白色牛角款 单支', nameEn: 'White Horn with Case' }
+  { kind: '单品', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameCn: '白色牛角款', nameEn: 'White Horn' },
+  { kind: '单品', values: ['粉红【3411牛角】'], pcs: 1, accessory: false, nameEn: 'Pink Horn' },
+  { kind: '一组', values: ['白色【3411牛角】'], pcs: 1, accessory: true, nameCn: '白色牛角款（含配件）', nameEn: 'White Horn' }
 ] };
 const cnRows = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: aiPlanCn });
-check('AI 写的中文名直接用（不再拼模板尾巴）', cnRows[0].nameCn === '白色牛角款 单支装', cnRows[0].nameCn);
-check('① 那一行标明「中文名来自 AI」（aiCn=true）', cnRows[0].aiCn === true && cnRows[1].aiCn === false,
+check('AI 写的中文名直接用', cnRows[0].nameCn === '白色牛角款', cnRows[0].nameCn);
+check('那一行标明「中文名来自 AI」（aiCn=true）', cnRows[0].aiCn === true && cnRows[1].aiCn === false,
   JSON.stringify(cnRows.map(r => r.aiCn)));
-check('AI 没给中文名 → 回落引擎模板（值名 + 单支）', /粉红【3411牛角】/.test(cnRows[1].nameCn), cnRows[1].nameCn);
-check('AI 忘了在名字里点出配件 → 自动补「+ 便携收纳盒」', /便携收纳盒/.test(cnRows[2].nameCn), cnRows[2].nameCn);
-check('补配件不会重复（AI 已经写了就不再加）', (cnRows[2].nameCn.match(/收纳盒/g) || []).length === 1, cnRows[2].nameCn);
+check('AI 没给中文名 → 回落成值原文，一个多余的字都不加',
+  cnRows[1].nameCn === '粉红【3411牛角】', cnRows[1].nameCn);
+check('引擎绝不替模型补「便携收纳盒」这类配件词（名字里没有就没有）',
+  !/收纳盒|支装/.test(cnRows.map(r => r.nameCn).join(' ')), cnRows.map(r => r.nameCn).join(' | '));
+check('配件这件事只落在数据列上（accessory=true / SKU 带 -C），不进名字',
+  cnRows[2].accessory === true && /-C$/.test(cnRows[2].sku), cnRows[2].sku);
 
 /* 值名自带件数时，模型又写一遍件数 → 去掉重复的那段（但单件值行不许动：「双支装」是必要信息） */
 const packProd = { source: { offerId: '1' }, specs: [{ label: '颜色', values: [
@@ -317,7 +346,9 @@ const singleProd = { source: { offerId: '2' }, specs: [{ label: '颜色', values
 const keepDbl = V.buildVariants(singleProd, { unitCost: 2.12, costMode: 'spec', aiPlan: { rows: [
   { kind: '组合装', values: ['灰色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm 双支装', nameEn: 'Grey 2 Pack' }] } });
 check('单件值行里的「双支装」不会被误删（那是必要信息）', /双支装/.test(keepDbl[0].nameCn), keepDbl[0].nameCn);
-check('不传 AI 计划时仍是原来的引擎规则（对照）', V.buildVariants(aiProd, { unitCost: 11.5 }).length > 4);
+check('不传 AI 计划时走引擎规则：3 个规格值 → 3 行，全是值原文',
+  V.buildVariants(aiProd, { unitCost: 11.5 }).length === 3 &&
+  V.buildVariants(aiProd, { unitCost: 11.5 }).every(r => !UNIT_WORDS.test(r.nameCn)));
 
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

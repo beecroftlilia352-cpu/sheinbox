@@ -54,7 +54,11 @@ check('示例：表头按规格维度生成「颜色」列（不再叫颜色规�
   $('thead').textContent.replace(/\s+/g, ' ').trim());
 check('示例：页脚公式已渲染', /折扣系数 K/.test($('formula').textContent));
 check('示例：拿货价自动取规格标价 0.34', $('unitCost').value === '0.34', $('unitCost').value);
-check('示例：变种数 ≥11', rows().length >= 11, `${rows().length} 行`);
+check('示例：行数 = 页面规格值数（3 个颜色 → 3 行，不再凭空多出组合行）',
+  rows().length === 3, `${rows().length} 行`);
+check('示例：变种名就是页面规格值原文（没有我编的单位/组合）',
+  rows().every(r => ['粉色', '绿色', '紫色'].includes(r.children[2].textContent.trim())),
+  rows().map(r => r.children[2].textContent.trim()).join('、'));
 check('示例：标题进页面', /刮毛刀/.test($('prodTitle').textContent));
 check('示例：店铺/品牌 chip', /远强不锈钢/.test($('prodChips').textContent) && /纳合/.test($('prodChips').textContent));
 check('示例：跨境专供 chip 标红提示', /比价风险高/.test($('prodChips').textContent));
@@ -155,13 +159,13 @@ check('换商品后变种名里没有上一个商品的颜色',
   rows()[0] ? rows()[0].children[2].textContent : '（无行）');
 check('换商品后 SKU 换成了新 offer 的后四位',
   /YQ-0659/.test(cell(0, 1)) && !/YQ-2516/.test(cell(0, 1)), cell(0, 1));
-check('换商品后行数变成单色兜底的 6 行', rows().length === 6, `${rows().length} 行`);
+check('换商品后只剩这一个规格值 → 1 行', rows().length === 1, `${rows().length} 行`);
 check('换商品后表头提示写明「单色兜底」', /单色兜底/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 60));
 check('换商品后重量跟着换（211g）', $('weight').value === '211', $('weight').value);
 
 // 8.9) 兼容老格式/老缓存：解析结果只有 colors、没有 specs 维度时也必须照常出规格行
 w.eval('PRODUCT.specs = undefined; PRODUCT.colors = [{name:"粉色",code:"C1Y1P",price:0.34},{name:"绿色",code:"C1Y1Q",price:0.34}]; onProduct(PRODUCT, "老格式测试");');
-check('老格式（只有 colors）→ 仍按规格生成行', rows().length === 9, `${rows().length} 行`);
+check('老格式（只有 colors）→ 仍按规格生成行（2 个值 → 2 行）', rows().length === 2, `${rows().length} 行`);
 check('老格式 → 规格列有值、SKU 仍用页面编码',
   rows()[0].children[4].textContent.trim() === '粉色' && /C1Y1P/.test(cell(0, 1)),
   cell(0, 1) + ' / ' + rows()[0].children[4].textContent.trim());
@@ -176,7 +180,7 @@ check('组合值：每格是拆开的原值（不写死「颜色规格」）',
   rows()[0].children[4].textContent.trim() === '英文版.欧规' && rows()[0].children[5].textContent.trim() === '紫色全自动32mm',
   rows()[0].children[4].textContent.trim() + ' | ' + rows()[0].children[5].textContent.trim());
 check('组合值：SKU 用页面顺序 S1/S2 + 包装后缀', cell(0, 1) === 'YQ-6330-S1-1P' && cell(1, 1) === 'YQ-6330-S2-1P', cell(0, 1) + ',' + cell(1, 1));
-check('组合值：变种名 = 页面规格值 + 包装', /【英文版.欧规】紫色全自动32mm单支（原规格）/.test(rows()[0].children[2].textContent), rows()[0].children[2].textContent.trim());
+check('组合值：变种名 = 页面规格值原文（不加任何我编的尾巴）', rows()[0].children[2].textContent.trim() === '【英文版.欧规】紫色全自动32mm', rows()[0].children[2].textContent.trim());
 // 8.96) 双规格（颜色 + 尺码）：两列都要出；把「规格列上限」调到 1 时收起来并提示还有几级
 w.eval('PRODUCT.source={offerId:"841299382846"}; PRODUCT.specs=[' +
   '{label:"颜色",values:[{name:"白色【3411牛角】",code:null,price:null,stock:null},{name:"粉红【3411牛角】",code:null,price:null,stock:null}]},' +
@@ -202,8 +206,8 @@ w.eval('PRODUCT.source={offerId:"841299382846"}; PRODUCT.specs=[' +
   '{label:"尺码",values:[{name:"36-37适合35-36码",code:null,price:11.5,stock:3},{name:"40-41适合39-40码",code:null,price:11.5,stock:59}]}]; ' +
   'PRODUCT.colors=[]; onProduct(PRODUCT, "逗号值测试");');
 check('值里带中文逗号：仍按 2 个颜色值排（不被拆成 3 个）',
-  /颜色 2 值/.test($('rowHint').textContent) && rows().filter(r => /单支（原规格）/.test(r.children[2].textContent)).length === 4,
-  $('rowHint').textContent.slice(0, 60));
+  /颜色 2 值/.test($('rowHint').textContent) && rows().length === 4,
+  $('rowHint').textContent.slice(0, 60) + ' ／ ' + rows().length + ' 行');
 check('值里带中文逗号：原样显示在格子里',
   rows().some(r => r.children[4].textContent.trim() === '【清仓随机款，尺码可指定】'),
   [...new Set(rows().map(r => r.children[4].textContent.trim()))].join(' / '));

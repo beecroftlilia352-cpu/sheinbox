@@ -130,12 +130,12 @@
         <option value="spec" selected>按各规格自己的标价（推荐）</option>
         <option value="param">全部用上面那个拿货价</option></select></div>
       <div class="fld"><label>变种计划怎么排</label><select id="planMode">
-        <option value="engine" selected>引擎规则（每个规格一支 + 固定组合）</option>
-        <option value="ai">DeepSeek 思考（挑组合 / 件数 / 英文名）</option></select></div>
+        <option value="engine" selected>引擎规则（页面有几个规格值就几行，不编组合）</option>
+        <option value="ai">DeepSeek 思考（挑组合 / 件数 / 中英文名）</option></select></div>
     </div>
     <div class="row" style="margin-top:8px">
       <button id="btnAi" class="ghost">让 DeepSeek 排一版变种</button>
-      <span class="hint">DeepSeek 只排「哪些规格组合上架 + 件数 + 英文变种名」；价格、成本、利润仍由这里的引擎算。它要是编了页面上没有的规格值，整份计划会被打回、自动回落到引擎规则。</span>
+      <span class="hint">DeepSeek 只排「哪些规格值组合上架 + 件数 + 中英文变种名」；价格、成本、利润仍由这里的引擎算。它要是编了页面上没有的规格值，整份计划被打回、自动回落引擎规则；它要是自己造了包装单位/配件词（如「双支装」「便携收纳盒」），那一栏名会被丢掉落回成规格值原文。</span>
     </div>
     <div id="aiBox" class="hint" style="margin-top:6px"></div>
     <div class="hint" id="paramEcho" style="margin-top:8px"></div>
@@ -491,7 +491,9 @@ function renderRows() {
     return '<tr class="' + (i === SEL ? 'sel' : '') + '" data-i="' + i + '">' +
       '<td class="l">' + r.idx + '</td>' +
       '<td class="l mono">' + r.sku + '</td>' +
-      '<td class="l">' + r.nameCn + ' <span class="pn">' + r.kind + '</span></td>' +
+      // 名字后面那个小标签：只在 AI 档显示（那是模型自己给这行起的名）；引擎档不显示，
+      // 免得又变成「往名字里塞我编的词」—— 引擎行的名字必须是页面值原文。
+      '<td class="l">' + r.nameCn + ((r.ai && r.kind) ? ' <span class="pn">' + esc(r.kind) + '</span>' : '') + '</td>' +
       '<td class="l' + (r.enPending ? ' enpending' : '') + '"' + (r.enPending ? ' title="这个词表里没有，英文名还带中文 —— 请在 app.js 的 EN_WORDS 里补词，或直接把变种名改掉"' : '') + '>' + esc(r.nameEn) + '</td>' +
       cols.map(lab => '<td class="l">' + esc((r.spec && r.spec[lab]) || (hasDims ? '' : r.colorSpec)) + '</td>').join('') +
       '<td><input type="number" min="1" step="1" value="' + r.pcs + '" data-pcs="' + r.sku + '" style="width:60px;text-align:right"></td>' +
@@ -530,7 +532,7 @@ function renderRows() {
     : '无规格值（单色兜底）';
   const trunc = ROWS[ROWS.length - 1] && ROWS[ROWS.length - 1].truncated;
   const enPend = ROWS.filter(r => r.enPending).length;
-  $('rowHint').textContent = '共 ' + ROWS.length + ' 个变种（原规格 ' + ROWS.filter(r => r.kind === '原规格').length + ' 个）' +
+  $('rowHint').textContent = '共 ' + ROWS.length + ' 个变种' +
     ' ｜ 规格：' + dimTxt +
     (enPend ? ' ｜ 有 ' + enPend + ' 行英文名还带中文（词表里没收录，标黄了）：在 app.js 的 EN_WORDS 里补词，或直接在表格里改' : '') +
     (trunc ? ' ｜ 规格组合太多，只保留前 ' + trunc.kept + ' 行（本来 ' + trunc.total + ' 行）' : '') +

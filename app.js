@@ -185,9 +185,6 @@
     const dims = allDims.slice(0, maxDims);
     const primary = dims[0];
     const colorsAll = primary.values;                          // 真实规格行用**全部**值（上架要覆盖每个规格）
-    // 包装组合行（双支装/混合装/囤货装）只能用「单件规格值」去拼：拿「5片装」去拼双支装会变成半包/整包混乱
-    const singles = colorsAll.filter(c => packQtyOf(c.name) === 1);
-    const colors = (singles.length ? singles : colorsAll).slice(0, p.maxColors);   // 上限只约束包装行，避免行数爆掉
     const tag = (product && product.source && product.source.offerId) ? String(product.source.offerId).slice(-4) : '0000';
 
     // 子规格的笛卡尔组合（每个组合 = 一组具体规格值）；没有子规格时就是一个空组合
@@ -198,15 +195,10 @@
     const pcode = (c, i) => c.code || 'S' + (i + 1);
     const skuOf = (head, combo) => `YQ-${tag}-${[head].concat(combo.map(x => x.code)).join('-')}`;
     const mixHead = vals => 'MIX' + (vals.length > 1 ? vals.length : '');
-    const cCn = (combo) => combo.map(x => x.value.name).join('');
+    const cCn = (combo) => combo.map(x => x.value.name).join('');   // 子规格值原文（数据，不是模板词）
     const cEn = (combo) => combo.map(x => enOf(x.value.name)).join(' ');
-    // 中文名：1~2 个值直接写值名，更多值写「N 款规格混合装 …」（N 来自真实数据）
-    const cnMix = (vals, tail) => (vals.length <= 2
-      ? `${vals.map(v => v.name).join('+')} ${tail}`
-      : `${vals.length} 款规格混合装 ${tail}`);
-    const enMix = (vals, tail) => `${vals.length} Specs ${tail}`;
 
-    const base = [], extra = [];                             // 先排「真实规格」行，再排包装组合行
+    const base = [], extra = [];                             // 真实规格行在前；AI 规划的组合行在后（封顶时先丢后面的）
     const add = (o, isBase, vals) => {
       // 整包卖的规格（值名里带「5片装」这类自带件数）→ 件数必须是它的整数倍，否则会算出「半包」这种不存在的货
       const bq = (vals || []).filter(Boolean).reduce((a, v) => a + packQtyOf(v.name), 0);
@@ -238,88 +230,46 @@
         const bq = picked.reduce((a, x) => a + packQtyOf(x.value.name), 0) || 1;
         const rawPcs = Math.max(1, Math.round(n(r.pcs) || 1));
         const pcs = bq > 1 ? Math.max(bq, Math.round(rawPcs / bq) * bq) : rawPcs;
-        const one = cnVals.length === 1 ? cnVals[0] : null;
-        const oneQ = one ? packQtyOf(one.name) : 0;
-        // 单值行：值名里已经写了「5片装」就不再叠「5支装」（那是模板味，不是信息）；单件值才写「单支」
-        // 中文名优先用模型写的（AI 档）；模型没写或写了不合规的（validatePlan 会丢掉）→ 引擎模板兜底
-        // 模型偶尔把件数说两遍：值名里已有「5片装」，它又用中文数字写个「五片装/五支装」。
-        // 只删「模型补的中文数字说法」，绝不碰值名原文里那串（规格值是逐字展示的，删了就变成另一个值了）。
+        // 名字只允许来自两处：模型写的（AI 档），或者**页面上抓到的规格值原文**。
+        // 引擎绝不往名字里加「N支装 / 收纳盒 / Pack」这类我在代码里编的单位和组合 —— 那种词只能是数据，不能是模板。
         let cnUse = r.nameCn;
         if (cnUse && cnVals.length) {
           const q0 = packQtyOf(cnVals[0].name);
           const sameAll = q0 > 1 && cnVals.every(v => packQtyOf(v.name) === q0);
+          // 模型偶尔把件数说两遍（值名里已有「5片装」，它又写「五片装」）：只删它自己那段中文数字说法
           if (sameAll && /[0-9]+\s*[支片个条双]\s*装/.test(cnUse)) {
             cnUse = cnUse.replace(/[一二三四五六七八九十两]+\s*[支片个条双]\s*装/g, ' ').replace(/\s+/g, ' ').trim();
           }
         }
-        const nameCn = cnUse || ((one && (oneQ > 1 || pcs === 1))
-          ? `${one.name}${oneQ > 1 ? '（原规格）' : '单支（原规格）'}`
-          : cnMix(cnVals, `${pcs} 支装`) + (r.accessory ? ' + 便携收纳盒' : ''));
-        const nameCnFinal = (cnUse && r.accessory && !/盒|case/i.test(cnUse))
-          ? cnUse + ' + 便携收纳盒' : nameCn;      // 带配件的行必须在名字里点出配件（模型漏了就补上）
-        let nameEn = String(r.nameEn || '').trim() ||
-          ((one && oneQ > 1) ? enOf(one.name)
-            : `${cnVals.map(v => enOf(v.name)).join(' + ')} - ${pcs} Pack`);
-        if (r.accessory && one && !/case|盒/i.test(nameEn)) nameEn += ' with Case';   // AI 自己写了就不再叠
+        // 模型没给名字 → 直接用值原文，一个多余的字都不加
+        const nameCn = cnUse || cnVals.map(v => v.name).join(' + ');
+        const nameEn = String(r.nameEn || '').trim() || cnVals.map(v => enOf(v.name)).join(' + ');
         add({
           sku: skuOf(head, combo) + '-' + pcs + 'P' + (r.accessory ? '-C' : ''),
-          nameCn: nameCnFinal, nameEn,
+          nameCn, nameEn,
           spec: specOfValues(vals, dims, combo),
           colorSpec: cnVals.map(v => v.name).join('/'),
-          pcs, accessory: !!r.accessory, kind: r.kind || '组合装', ai: true, aiCn: !!cnUse
-        }, r.kind === '原规格', vals);
+          pcs, accessory: !!r.accessory, kind: String(r.kind || ''), ai: true, aiCn: !!cnUse
+        }, !r.accessory && pcs === bq, vals);      // 单位件、不带配件的行 = 真实规格行，排前面（封顶时不会先被丢）
       });
     } else combos.forEach(combo => {
       const cnTail = combo.length ? `｜${cCn(combo)}` : '';       // 子规格写进中文名，避免同名行
       const enTail = combo.length ? ` ${cEn(combo)}` : '';        // 英文名同理
-      const others = colors.slice(1);
-      // 1) 原厂规格：父规格每个值一支（值是页面上的原文，不是模板词）—— 这是「真实规格」行，先排
-      //    值名自带件数的（5片装/10片装）→ 这一行就是那一包：件数取整包，名字不再叠一个「单支」
+      /* 引擎只出「真实规格行」：父规格每个值一行，名字 = 页面上的值原文（+ 子规格原文），件数 = 值名自带的件数。
+       * 这里**绝不生成任何包装组合、配件款、多件装**，也绝不往名字里加「支装 / 收纳盒 / Pack」这类
+       * 我在代码里编出来的单位和组合 —— 那些只可能来自 DeepSeek 的计划（它按真实数据自己判断要不要做）。
+       * 这条有测试盯着：引擎输出的名字里只允许出现页面抓到的值原文。 */
       colorsAll.forEach((c, i) => {
         const q = packQtyOf(c.name);
         return add({
           sku: skuOf(pcode(c, i), combo) + `-${q}P`,
-          nameCn: (q > 1 ? `${c.name}（原规格）` : `${c.name}单支（原规格）`) + cnTail,
-          nameEn: (q > 1 ? `${enOf(c.name)}${enTail}` : `${enOf(c.name)}${enTail} - 1 Pack`),
+          nameCn: c.name + cnTail,
+          nameEn: enOf(c.name) + enTail,
           spec: specOfValues([c], dims, combo),
           colorSpec: c.name + (c.code ? ' #' + c.code + '#' : ''),
           pcs: q, accessory: false, kind: '原规格', source: c
         }, true, [c]);
       });
-      // 2) 首个值双支装
-      add({ sku: skuOf(pcode(colors[0], 0), combo) + '-2P', nameCn: `${colors[0].name}双支装${cnTail}`,
-        nameEn: `${enOf(colors[0].name)}${enTail} - 2 Pack`, spec: specOfValues([colors[0]], dims, combo),
-        colorSpec: colors[0].name, pcs: 2, accessory: false, kind: '组合装' }, false, [colors[0]]);
-      // 3) 两种规格各一支
-      if (others[0]) add({ sku: skuOf(mixHead(colors.slice(0, 2)), combo) + '-2P',
-        nameCn: cnMix(colors.slice(0, 2), '混合双支装') + cnTail,
-        nameEn: enMix(colors.slice(0, 2), '- 2 Pack') + enTail,
-        spec: specOfValues(colors.slice(0, 2), dims, combo),
-        colorSpec: colors.slice(0, 2).map(c => c.name).join('+'), pcs: 2, accessory: false, kind: '组合装' }, false, colors.slice(0, 2));
-      // 4) 三种规格各一支
-      if (others[1]) add({ sku: skuOf(mixHead(colors.slice(0, 3)), combo) + '-3P',
-        nameCn: cnMix(colors.slice(0, 3), '三支装') + cnTail,
-        nameEn: enMix(colors.slice(0, 3), '- 3 Pack') + enTail,
-        spec: specOfValues(colors.slice(0, 3), dims, combo),
-        colorSpec: colors.slice(0, 3).map(c => c.name).join('/'), pcs: 3, accessory: false, kind: '组合装' }, false, colors.slice(0, 3));
-      // 5) 六支装
-      add({ sku: skuOf(mixHead(colors), combo) + '-6P', nameCn: cnMix(colors, '六支装') + cnTail,
-        nameEn: enMix(colors, '- 6 Pack') + enTail, spec: specOfValues(colors, dims, combo),
-        colorSpec: colors.map(c => c.name).join('/'), pcs: 6, accessory: false, kind: '囤货装' }, false, colors);
-      // 6) 九支装（多件折扣）
-      add({ sku: skuOf(mixHead(colors), combo) + '-9P', nameCn: cnMix(colors, '九支装（多件折扣）') + cnTail,
-        nameEn: `All ${colors.length} Specs${enTail} - 9 Pack`, spec: specOfValues(colors, dims, combo),
-        colorSpec: colors.map(c => c.name).join('/'), pcs: 9, accessory: false, kind: '囤货装' }, false, colors);
-      // 7) 含收纳盒（配件）款
-      add({ sku: skuOf(pcode(colors[0], 0), combo) + '-1P-C', nameCn: `${colors[0].name}单支 + 便携收纳盒${cnTail}`,
-        nameEn: `${enOf(colors[0].name)}${enTail} with Travel Case`, spec: specOfValues([colors[0]], dims, combo),
-        colorSpec: colors[0].name, pcs: 1, accessory: true, kind: '带配件' }, false, [colors[0]]);
-      if (others[0]) add({ sku: skuOf(pcode(others[0], 1), combo) + '-2P-C', nameCn: `${others[0].name}双支 + 收纳盒${cnTail}`,
-        nameEn: `${enOf(others[0].name)}${enTail} - 2 Pack with Case`, spec: specOfValues([others[0]], dims, combo),
-        colorSpec: others[0].name, pcs: 2, accessory: true, kind: '带配件' }, false, [others[0]]);
-      add({ sku: skuOf(mixHead(colors.slice(0, 3)), combo) + '-3P-C', nameCn: cnMix(colors.slice(0, 3), '三支 + 收纳盒') + cnTail,
-        nameEn: enMix(colors.slice(0, 3), '- 3 Pack with Case') + enTail, spec: specOfValues(colors.slice(0, 3), dims, combo),
-        colorSpec: colors.slice(0, 3).map(c => c.name).join('/'), pcs: 3, accessory: true, kind: '带配件' }, false, colors.slice(0, 3));
     });
 
     // 真实规格行在前、包装组合行在后：封顶时先丢包装行，实打实的规格组合不丢
