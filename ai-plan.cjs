@@ -44,10 +44,15 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
 4) 可以用 kind=组合装/囤货装 做多支装或混搭（pcs=件数，取值 1~12），用 kind=带配件 表示含配件（accessory=true）。
    规格值本身自带包装件数的（如「5片装」），件数就按它写（pcs=5），不要把整包当成 1 件。
 5) 行的顺序 = 上架顺序：先原规格行，再组合/囤货，最后带配件；总行数不超过 maxRows。
-6) 英文名必须纯英文（可含数字、x、-、+、尺寸与型号编码），用欧洲买家看得懂的说法，不要拼音、不要中文；
-   规格值里的型号/数字编码（如 3411、30cm*30cm）要保留。
+6) 每个变种给两个名字：
+   nameEn = 英文名，必须纯英文（可含数字、x、-、+、尺寸与型号编码），用欧洲买家看得懂的说法，不要拼音、不要中文；
+            规格值里的型号/数字编码（如 3411、30cm*30cm）要保留。
+   nameCn = 中文名（内部用、给运营看），≤40 字，必须带上本行真实规格值原文或它们的款数，读起来要像人写的上架名，
+            例如「深灰色30cm*30cm 双片装 组合装」「3 款规格混合装 三支装」；含配件的行要在名字里点出配件。
+            不要价格/成本/元/折扣数字，不要发明规格值，不要用「模板词堆叠」的写法（同一行里别把同一件事说两遍）。
 只输出 JSON，不要解释文字、不要 markdown 代码块。格式：
-{"plan":[{"kind":"原规格","values":["规格值原文"],"pcs":1,"accessory":false,"nameEn":"English variant name"}],
+{"plan":[{"kind":"原规格","values":["规格值原文"],"pcs":1,"accessory":false,
+          "nameCn":"中文变种名","nameEn":"English variant name"}],
  "skipped":[{"value":"规格值","reason":"原因"}],
  "specNameEn":{"规格值原文":"English"},
  "notes":["一句话说明你的排法理由"]}`;
@@ -111,9 +116,9 @@ function validatePlan(product, plan) {
   const all = new Map();                       // 值名 → 值对象（允许重名不同编码：按名字比对即可）
   ((product && product.specs) || []).forEach(d => (d.values || []).forEach(v => all.set(String(v.name).trim(), v)));
   if (!all.size) errs.push('这个商品没有规格数据，AI 计划无从校验');
-  if (!plan || !Array.isArray(plan.plan)) { errs.push('返回里没有 plan 数组'); return { errs, rows: [], used: new Set(), skipped: [] }; }
+  if (!plan || !Array.isArray(plan.plan)) { errs.push('返回里没有 plan 数组'); return { errs, rows: [], used: new Set(), skipped: [], nameCnDropped: [] }; }
 
-  const rows = [], used = new Set(), badValues = new Set();
+  const rows = [], used = new Set(), badValues = new Set(), nameCnDropped = [];
   plan.plan.forEach((r, i) => {
     const kind = KINDS.includes(r && r.kind) ? r.kind : null;
     if (!kind) errs.push(`第 ${i + 1} 行的 kind 不认识：${r && r.kind}`);
@@ -126,10 +131,14 @@ function validatePlan(product, plan) {
     if (!(pcs >= 1 && pcs <= MAX_PCS)) errs.push(`第 ${i + 1} 行件数不合法：${r && r.pcs}`);
     const nameEn = String((r && r.nameEn) || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!nameEn) errs.push(`第 ${i + 1} 行没有英文名`);
+    // 中文名交给模型写（模板只做回落）。不合规的（带价格/超长/HTML）就丢掉这一栏，用引擎模板 —— 名字出错比名字平淡糟糕
+    let nameCn = String((r && r.nameCn) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (nameCn.length > 40) nameCn = nameCn.slice(0, 40).trim();
+    if (/[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn)) { nameCn = ''; nameCnDropped.push(i + 1); }
     if (unknown.length || !kind || !vals.length) return;
     rows.push({
       kind, values: vals, pcs: Math.round(pcs), accessory: kind === '带配件' || !!(r && r.accessory),
-      nameCn: String((r && r.nameCn) || '').trim() || null, nameEn
+      nameCn: nameCn || null, nameEn
     });
   });
 
@@ -142,7 +151,7 @@ function validatePlan(product, plan) {
   const bogusSkip = skipped.filter(s => !all.has(s.value)).map(s => s.value);
   if (bogusSkip.length) errs.push('skipped 里出现数据里没有的规格值：' + bogusSkip.join('、'));
 
-  return { errs, rows, used, skipped };
+  return { errs, rows, used, skipped, nameCnDropped };
 }
 
 /* 把 AI 的计划翻译成引擎能直接用的行（价格/成本/利润仍由 app.js 算） */
@@ -161,14 +170,20 @@ function normalize(product, plan, opts) {
     const vv = String(specNameEn[k] || '').trim().slice(0, 80);
     if (kk && vv) en[kk] = vv;
   });
+  const notes = (Array.isArray(plan.notes) ? plan.notes : []).map(x => String(x).slice(0, 300)).slice(0, 6);
+  const rowsNoCn = (v.nameCnDropped || []).length;
+  const rowsWithCn = rows.filter(r => r.nameCn).length;
+  if (rowsNoCn) notes.push(`有 ${rowsNoCn} 行的中文名不合规（带价格或太长），这 ${rowsNoCn} 行的中文名改用引擎模板`);
   return {
     ok: true,
     source: 'deepseek',
     rows,
     skipped: v.skipped,
-    notes: (Array.isArray(plan.notes) ? plan.notes : []).map(x => String(x).slice(0, 300)).slice(0, 6),
+    notes,
     specNameEn: en,
-    truncated
+    truncated,
+    nameCnUsed: rowsWithCn,           // 中文名里有多少行是模型自己写的（其余走引擎模板）
+    nameCnDropped: rowsNoCn
   };
 }
 

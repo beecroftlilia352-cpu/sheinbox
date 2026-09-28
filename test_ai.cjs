@@ -30,6 +30,8 @@ check('提示词明确「不要给价格/成本数字」', /不要给任何价�
 check('提示词要求逐字复制规格值', /逐字复制/.test(msgs[0].content));
 check('提示词带上 kinds / maxRows', payload.rules.kinds.length === 4 && payload.rules.maxRows === 30);
 check('提示词里没有密钥、也没有要求它算钱', !/apiKey|sk-/.test(msgs[1].content));
+check('提示词要模型写中文变种名（nameCn）与英文名（nameEn）', /nameCn/.test(msgs[0].content) && /nameEn/.test(msgs[0].content));
+check('提示词明确中文名不许带价格/成本', /不要价格\/成本/.test(msgs[0].content));
 
 /* 2) 只把「表格显示的那几级」给它：藏起来的维度不进计划（否则行会撞车） */
 const scoped = A.scope(prod, 1);
@@ -97,6 +99,40 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   check('能从 ```json 代码块里抠出 JSON', !!A.parseJsonLoose('```json\n{"plan":[]}\n```'));
   check('能从一段解释文字里抠出 JSON', !!A.parseJsonLoose('好的，这是计划：{"plan":[]} 以上。'));
   check('不是 JSON 就返回 null', A.parseJsonLoose('我不知道') === null);
+
+  /* 11) 中文变种名：模型写就用模型的；带价格/超长的丢掉那一栏（回落引擎模板），并如实报数 */
+  const withCn = { plan: [
+    { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰色30cm*30cm 单支装', nameEn: 'Grey 30cm*30cm - 1 Pack' },
+    { kind: '组合装', values: ['灰色30cm*30cm', '白色30cm*30cm'], pcs: 2, nameCn: '灰白两色各一支 双片装', nameEn: 'Grey + White - 2 Pack' },
+    { kind: '带配件', values: ['36-37适合35-36码'], pcs: 1, nameCn: '尺码 36-37 单支 + 便携收纳盒', nameEn: 'Size 36-37 with Case' },
+    { kind: '原规格', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款 只要 ¥2.3 一支', nameEn: 'Random Clearance - 1 Pack' }
+  ] };
+  const cn = A.normalize(prod, withCn, { maxRows: 20 });
+  check('中文名照搬模型写的', cn.ok && cn.rows[0].nameCn === '灰色30cm*30cm 单支装', cn.rows && cn.rows[0].nameCn);
+  check('混装行也照搬模型的中文名（不强行套模板）', cn.ok && /两色各一支/.test(cn.rows[1].nameCn), cn.rows && cn.rows[1].nameCn);
+  check('带价格的中文名被丢掉 → 那一栏留空，回落引擎模板', cn.ok && cn.rows[3].nameCn === null, cn.rows && cn.rows[3].nameCn);
+  check('如实报数：几行用了模型名、几行丢掉了', cn.ok && cn.nameCnUsed === 3 && cn.nameCnDropped === 1,
+    JSON.stringify({ used: cn.nameCnUsed, dropped: cn.nameCnDropped }));
+  check('说明里写清「有行回落引擎模板」', cn.ok && (cn.notes || []).some(x => /中文名不合规/.test(x)), (cn.notes || []).join(' / '));
+
+  const longCn = { plan: [
+    { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰'.repeat(60), nameEn: 'Grey' },
+    { kind: '原规格', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White' },
+    { kind: '原规格', values: ['36-37适合35-36码'], pcs: 1, nameEn: 'Size 36-37' },
+    { kind: '原规格', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Random' }
+  ] };
+  const lc = A.normalize(prod, longCn, {});
+  check('超长中文名截到 40 字', lc.ok && lc.rows[0].nameCn.length === 40, lc.rows && lc.rows[0].nameCn.length);
+
+  const noCn = { plan: [
+    { kind: '原规格', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey' },
+    { kind: '原规格', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White' },
+    { kind: '原规格', values: ['36-37适合35-36码'], pcs: 1, nameEn: 'Size 36-37' },
+    { kind: '原规格', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Random' }
+  ] };
+  const nc = A.normalize(prod, noCn, {});
+  check('模型没给中文名 → 那一栏留空（由前端回落引擎模板）',
+    nc.ok && nc.rows[0].nameCn === null && nc.nameCnUsed === 0, JSON.stringify({ cn: nc.ok && nc.rows[0].nameCn, used: nc.nameCnUsed }));
 
   console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
   process.exit(bad ? 1 : 0);

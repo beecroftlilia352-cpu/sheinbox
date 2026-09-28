@@ -401,7 +401,14 @@ function regenInner(resetSel) {
 /* ---------- DeepSeek 排变种（它只排组合/件数/英文名，价格与成本仍由引擎算） ---------- */
 function aiBoxHtml(j) {
   const parts = [];
-  (j.notes || []).forEach(n => parts.push('· ' + esc(n)));
+  // 名字是谁写的 —— 以**表里真实的行**为准（引擎可能还会丢掉不合法行），不是以模型自称的为准
+  const n = ROWS.length || (j.rows || []).length;
+  const cnUsed = ROWS.length ? ROWS.filter(r => r.aiCn).length
+    : ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : 0);
+  parts.push('· 命名来源：中文名 <b>' + cnUsed + ' 行来自 DeepSeek</b>' +
+    (n - cnUsed > 0 ? '、' + (n - cnUsed) + ' 行用了引擎模板（模型没给、或给了不合规的名）' : '') +
+    '；英文名 ' + n + ' 行来自 DeepSeek；价格/成本仍是本地引擎算');
+  (j.notes || []).forEach(x => parts.push('· ' + esc(x)));
   (j.skipped || []).forEach(s => parts.push('· 没上架：<b>' + esc(s.value) + '</b>（' + esc(s.reason) + '）'));
   if (!(j.skipped || []).length) parts.push('· 所有规格值都排进去了，没有跳过的');
   if (j.truncated) parts.push('· 行数超上限：只保留前 ' + j.truncated.kept + ' 行（本来 ' + j.truncated.total + ' 行）');
@@ -430,9 +437,12 @@ async function aiPlanNow() {
       return;
     }
     AI_PLAN = j; OV = {};
-    AI_NOTE = ' ｜ 变种计划：DeepSeek 排的 ' + (j.rows || []).length + ' 行（' + (j.model || 'deepseek') + '，' + (j.elapsedSec || 0) + 's）';
-    $('aiBox').innerHTML = aiBoxHtml(j);
+    AI_NOTE = ' ｜ 变种计划：DeepSeek 排的 ' + (j.rows || []).length + ' 行（' + (j.model || 'deepseek') + '，' + (j.elapsedSec || 0) + 's）'
+      + '；命名：中文 ' + ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : (j.rows || []).length) + '/' + (j.rows || []).length + ' 行来自 DeepSeek'
+      + '，英文全部来自 DeepSeek';
+    $('aiBox').innerHTML = '';
     regen(true);
+    $('aiBox').innerHTML = aiBoxHtml(j);        // 得等表格出来，才能按表里真实的行数说清命名来源
     setStatus('ready', 'DeepSeek 排好了：' + (j.rows || []).length + ' 行变种（价格与成本仍是本地引擎算的）。');
   } catch (e) {
     AI_PLAN = null; OV = {};
@@ -661,7 +671,12 @@ $('btnFormulas').onclick = () => {
     '链接：' + ((PRODUCT && PRODUCT.source && PRODUCT.source.url) || '—'),
     '参数：' + JSON.stringify(params()),
     '变种计划来源：' + (AI_PLAN ? ('DeepSeek ' + (AI_PLAN.model || '') + '（' + (AI_PLAN.rows || []).length + ' 行' +
-      ((AI_PLAN.skipped || []).length ? '，跳过 ' + AI_PLAN.skipped.map(s => s.value).join('、') : '') + '）') : '引擎规则'), ''];
+      ((AI_PLAN.skipped || []).length ? '，跳过 ' + AI_PLAN.skipped.map(s => s.value).join('、') : '') + '）') : '引擎规则'),
+    '命名来源：' + (AI_PLAN
+      ? ('中文名 DeepSeek ' + ((typeof AI_PLAN.nameCnUsed === 'number') ? AI_PLAN.nameCnUsed : (AI_PLAN.rows || []).length) +
+         ' 行 / 引擎模板 ' + ((AI_PLAN.rows || []).length - ((typeof AI_PLAN.nameCnUsed === 'number') ? AI_PLAN.nameCnUsed : (AI_PLAN.rows || []).length)) +
+         ' 行；英文名 DeepSeek ' + (AI_PLAN.rows || []).length + ' 行')
+      : '中文名与英文名都由引擎按抓取数据 + 词表生成（可选：让 DeepSeek 命名）'), ''];
   ROWS.forEach(r => { out.push('【' + r.idx + '】' + r.sku + '  ' + r.nameCn + '（' + r.nameEn + '）'); out.push(...V.formulaLines(r, params()).map(l => '    ' + l)); out.push(''); });
   download('变种公式与定价.txt', out.join('\r\n'), 'text/plain');
 };

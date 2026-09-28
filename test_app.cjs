@@ -285,6 +285,38 @@ const guard = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: { rows: [
   { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, nameEn: 'White' }] } });
 check('AI 行里的值在表里找不到 → 该行被丢掉（第二道保险）',
   guard.length === 1 && guard[0].nameEn === 'White', guard.map(r => r.nameEn).join(','));
+
+/* AI 写的中文名：用它的；它没写 → 引擎模板；带配件它忘了点出配件 → 补上。
+ * （用户问过「这尾巴的变种名是被你写死了吗」—— 所以「谁写的」这件事要有测试盯着） */
+const aiPlanCn = { rows: [
+  { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameCn: '白色牛角款 单支装', nameEn: 'White Horn - 1 Pack' },
+  { kind: '原规格', values: ['粉红【3411牛角】'], pcs: 1, accessory: false, nameEn: 'Pink Horn - 1 Pack' },
+  { kind: '带配件', values: ['白色【3411牛角】'], pcs: 1, accessory: true, nameCn: '白色牛角款 单支', nameEn: 'White Horn with Case' }
+] };
+const cnRows = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: aiPlanCn });
+check('AI 写的中文名直接用（不再拼模板尾巴）', cnRows[0].nameCn === '白色牛角款 单支装', cnRows[0].nameCn);
+check('① 那一行标明「中文名来自 AI」（aiCn=true）', cnRows[0].aiCn === true && cnRows[1].aiCn === false,
+  JSON.stringify(cnRows.map(r => r.aiCn)));
+check('AI 没给中文名 → 回落引擎模板（值名 + 单支）', /粉红【3411牛角】/.test(cnRows[1].nameCn), cnRows[1].nameCn);
+check('AI 忘了在名字里点出配件 → 自动补「+ 便携收纳盒」', /便携收纳盒/.test(cnRows[2].nameCn), cnRows[2].nameCn);
+check('补配件不会重复（AI 已经写了就不再加）', (cnRows[2].nameCn.match(/收纳盒/g) || []).length === 1, cnRows[2].nameCn);
+
+/* 值名自带件数时，模型又写一遍件数 → 去掉重复的那段（但单件值行不许动：「双支装」是必要信息） */
+const packProd = { source: { offerId: '1' }, specs: [{ label: '颜色', values: [
+  { name: '灰色30cm*30cm*5片装', code: null, price: 11.5, stock: 9 },
+  { name: '白色30cm*30cm*5片装', code: null, price: 11.5, stock: 9 }] }] };
+const dupRows = V.buildVariants(packProd, { unitCost: 11.5, costMode: 'spec', aiPlan: { rows: [
+  { kind: '原规格', values: ['灰色30cm*30cm*5片装'], pcs: 5, nameCn: '灰色30cm*30cm*5片装 五片装', nameEn: 'Grey 5-Piece Pack' },
+  { kind: '组合装', values: ['灰色30cm*30cm*5片装', '白色30cm*30cm*5片装'], pcs: 5, nameCn: '2 款颜色 30cm*30cm*5片装 五支装 混合装', nameEn: 'Grey + White 5-Piece Mix' }
+] } });
+check('值名里已有件数、模型又说一遍 → 去掉重复那段', dupRows[0].nameCn === '灰色30cm*30cm*5片装', dupRows[0].nameCn);
+check('混装行同理（去掉重复件数、保留组合说明）', !/五支装/.test(dupRows[1].nameCn) && /混合装/.test(dupRows[1].nameCn), dupRows[1].nameCn);
+
+const singleProd = { source: { offerId: '2' }, specs: [{ label: '颜色', values: [
+  { name: '灰色30cm*30cm', code: null, price: 2.12, stock: 9 }] }] };
+const keepDbl = V.buildVariants(singleProd, { unitCost: 2.12, costMode: 'spec', aiPlan: { rows: [
+  { kind: '组合装', values: ['灰色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm 双支装', nameEn: 'Grey 2 Pack' }] } });
+check('单件值行里的「双支装」不会被误删（那是必要信息）', /双支装/.test(keepDbl[0].nameCn), keepDbl[0].nameCn);
 check('不传 AI 计划时仍是原来的引擎规则（对照）', V.buildVariants(aiProd, { unitCost: 11.5 }).length > 4);
 
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');

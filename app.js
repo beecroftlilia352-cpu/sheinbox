@@ -241,19 +241,32 @@
         const one = cnVals.length === 1 ? cnVals[0] : null;
         const oneQ = one ? packQtyOf(one.name) : 0;
         // 单值行：值名里已经写了「5片装」就不再叠「5支装」（那是模板味，不是信息）；单件值才写「单支」
-        const nameCn = r.nameCn || ((one && (oneQ > 1 || pcs === 1))
+        // 中文名优先用模型写的（AI 档）；模型没写或写了不合规的（validatePlan 会丢掉）→ 引擎模板兜底
+        // 模型偶尔把件数说两遍：值名里已有「5片装」，它又用中文数字写个「五片装/五支装」。
+        // 只删「模型补的中文数字说法」，绝不碰值名原文里那串（规格值是逐字展示的，删了就变成另一个值了）。
+        let cnUse = r.nameCn;
+        if (cnUse && cnVals.length) {
+          const q0 = packQtyOf(cnVals[0].name);
+          const sameAll = q0 > 1 && cnVals.every(v => packQtyOf(v.name) === q0);
+          if (sameAll && /[0-9]+\s*[支片个条双]\s*装/.test(cnUse)) {
+            cnUse = cnUse.replace(/[一二三四五六七八九十两]+\s*[支片个条双]\s*装/g, ' ').replace(/\s+/g, ' ').trim();
+          }
+        }
+        const nameCn = cnUse || ((one && (oneQ > 1 || pcs === 1))
           ? `${one.name}${oneQ > 1 ? '（原规格）' : '单支（原规格）'}`
           : cnMix(cnVals, `${pcs} 支装`) + (r.accessory ? ' + 便携收纳盒' : ''));
+        const nameCnFinal = (cnUse && r.accessory && !/盒|case/i.test(cnUse))
+          ? cnUse + ' + 便携收纳盒' : nameCn;      // 带配件的行必须在名字里点出配件（模型漏了就补上）
         let nameEn = String(r.nameEn || '').trim() ||
           ((one && oneQ > 1) ? enOf(one.name)
             : `${cnVals.map(v => enOf(v.name)).join(' + ')} - ${pcs} Pack`);
         if (r.accessory && one && !/case|盒/i.test(nameEn)) nameEn += ' with Case';   // AI 自己写了就不再叠
         add({
           sku: skuOf(head, combo) + '-' + pcs + 'P' + (r.accessory ? '-C' : ''),
-          nameCn, nameEn,
+          nameCn: nameCnFinal, nameEn,
           spec: specOfValues(vals, dims, combo),
           colorSpec: cnVals.map(v => v.name).join('/'),
-          pcs, accessory: !!r.accessory, kind: r.kind || '组合装', ai: true
+          pcs, accessory: !!r.accessory, kind: r.kind || '组合装', ai: true, aiCn: !!cnUse
         }, r.kind === '原规格', vals);
       });
     } else combos.forEach(combo => {

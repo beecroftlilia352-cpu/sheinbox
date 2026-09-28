@@ -260,6 +260,9 @@ async function aiPageChecks() {
   check('AI 给的英文变种名进了表', /White 3411 Horn/.test(cell(0, enCol)), cell(0, enCol));
   check('④ 提示写明这份计划来自 DeepSeek', /DeepSeek/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 70));
   check('跳过的规格值与理由显示给用户', /随机款/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 70));
+  check('中文变种名那一栏写明「几行来自 DeepSeek / 几行回落模板」（按表里真实行数）',
+    /命名来源/.test($('aiBox').textContent) && /0 行来自 DeepSeek/.test($('aiBox').textContent),
+    $('aiBox').textContent.slice(0, 90));
   check('定价仍是本地引擎算的（不是 AI 给的数）', parseFloat(cell(0, priceCol)) > 0, cell(0, priceCol));
 
   w.fetch = async () => ({ json: async () => ({ ok: false, error: 'HTTP 429 太频繁' }) });
