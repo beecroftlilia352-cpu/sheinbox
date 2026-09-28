@@ -376,6 +376,7 @@ async function aiPageChecks() {
   paramKeepChecks();
   await copyBtnChecks();
   selectChecks();
+  soldOutChecks();
   finish();
 })();
 
@@ -420,6 +421,19 @@ async function browserBoxChecks() {
 
 /* 列表里要能用鼠标自由拖选复制（用户报：列表内鼠标无法自由选择复制）
  * 病根：点行选中时调 renderRows() 重建整张表 —— 拖选文字一松手（click 触发）就被清空。 */
+/* 已售罄的规格值不列入 + 页面上要说一句（用户要求：已售罄的规格不抓取） */
+function soldOutChecks() {
+  w.eval('PRODUCT.soldOut = ["灰色30cm*30cm", "深灰色30cm*30cm"]; onProduct(PRODUCT, "售罄提示测试");');
+  const withSoldOut = rows().length;
+  check('已售罄：商品区出现「已售罄未列入」提示',
+    /已售罄未列入/.test($('prodChips').textContent) && /灰色30cm\*30cm/.test($('prodChips').textContent),
+    $('prodChips').textContent.replace(/\s+/g, ' ').slice(0, 120));
+  w.eval('PRODUCT.soldOut = []; onProduct(PRODUCT, "售罄提示复位");');
+  check('已售罄：列出行数不受影响（售罄值在解析层就踢掉了，这里只是提示）',
+    rows().length === withSoldOut && withSoldOut > 0, rows().length + ' vs ' + withSoldOut);
+  check('已售罄：没有售罄值时不出这行提示', !/已售罄未列入/.test($('prodChips').textContent));
+}
+
 function selectChecks() {
   if (!rows().length) { check('列表拖选复制：需要有行才能测', false); return; }
   const node0 = rows()[0], node1 = rows()[1];

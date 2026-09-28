@@ -123,6 +123,40 @@ check('塞进来的价格/成本字段被剥掉（钱只由引擎算）',
   mt.ok ? JSON.stringify(Object.keys(mt.rows[0])) : mt.error);
 
 /* 7) 件数越界 / kind 不认 / 空计划 → 拒绝 */
+/* 件数必须与「这一行列了哪些值」对得上（用户报：情侣混搭两双被算成 4 件） */
+const shoe = { source: { offerId: '841299382846' }, specs: [
+  { label: '颜色', values: [{ name: '白色', code: null, price: 11.5 }, { name: '灰色', code: null, price: 11.5 }] },
+  { label: '尺码', values: [{ name: '36-37', code: null, price: 11.5 }, { name: '40-41', code: null, price: 11.5 }] }
+] };
+const baseRows = [
+  { kind: '单品', values: ['白色', '36-37'], pcs: 1, nameEn: 'White 36-37', nameCn: '白色 36-37 单件' },
+  { kind: '单品', values: ['灰色', '36-37'], pcs: 1, nameEn: 'Grey 36-37', nameCn: '灰色 36-37 单件' },
+  { kind: '单品', values: ['白色', '40-41'], pcs: 1, nameEn: 'White 40-41', nameCn: '白色 40-41 单件' },
+  { kind: '单品', values: ['灰色', '40-41'], pcs: 1, nameEn: 'Grey 40-41', nameCn: '灰色 40-41 单件' }
+];
+const coupleOk = A.normalize(shoe, { plan: baseRows.concat([
+  { kind: '情侣混搭', values: ['白色', '灰色', '36-37'], pcs: 2, nameEn: 'White + Grey Couple Set x2', nameCn: '白色+灰色 情侣混搭 2件装' }
+]) });
+check('情侣混搭：2 色 + 1 码 + pcs=2 → 放行（2 件就是 2 件）', coupleOk.ok, coupleOk.error || '');
+check('情侣混搭：放行后该行件数 = 2', coupleOk.ok && coupleOk.rows.some(r => r.pcs === 2 && r.values.length === 3),
+  JSON.stringify((coupleOk.rows || []).map(r => r.pcs)));
+
+const coupleBad = A.normalize(shoe, { plan: baseRows.concat([
+  { kind: '情侣混搭', values: ['白色', '灰色', '36-37', '40-41'], pcs: 2, nameEn: 'Couple Set x2', nameCn: '情侣混搭 2件装' }
+]) });
+check('情侣混搭：2 色 + 2 码 却写 pcs=2 → 拒绝（列的值本身就是 4 件）',
+  !coupleBad.ok && /4 的整数倍/.test(coupleBad.error), String(coupleBad.error).slice(0, 120));
+
+const coupleFour = A.normalize(shoe, { plan: baseRows.concat([
+  { kind: '情侣混搭', values: ['白色', '灰色', '36-37', '40-41'], pcs: 4, nameEn: 'Couple Set x4', nameCn: '情侣混搭 4件装' }
+]) });
+check('情侣混搭：同样 4 个值 + pcs=4 → 放行（名字与件数一致就行）', coupleFour.ok, coupleFour.error || '');
+
+const packWrong = A.normalize(shoe, { plan: baseRows.concat([
+  { kind: '多件装', values: ['白色', '36-37'], pcs: 3, nameEn: 'White x3', nameCn: '白色 3件装' }
+]) });
+check('单值多件装：pcs=3（同一款的 3 件）→ 放行，不逼成 1 件', packWrong.ok, packWrong.error || '');
+
 check('件数 13 → 拒绝', !A.normalize(prod, { plan: [{ kind: '原规格', values: ['灰色30cm*30cm'], pcs: 13, nameEn: 'X' }] }).ok);
 check('件数 0 → 拒绝', !A.normalize(prod, { plan: [{ kind: '原规格', values: ['灰色30cm*30cm'], pcs: 0, nameEn: 'X' }] }).ok);
 check('kind 随便起（引擎不再有类别白名单）→ 放行', A.normalize(prod, { plan: [

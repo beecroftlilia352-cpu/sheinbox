@@ -262,10 +262,23 @@
       if (d.values.some(x => x.name === v.name && (x.code || null) === (v.code || null))) return;
       d.values.push({ name: v.name, code: v.code || null, price: v.price, stock: v.stock, parts: v.parts || null });
     });
+    /* 已售罄的规格值不列入（用户要求：抓取规格的时候，已售罄的规格不抓取）。
+     * 判定只认页面上写明的：库存明确是 0，或者值名里带售罄/无货/缺货。
+     * 库存数据本身没有（null）的一律保留 —— 页面没写清楚就不猜，宁可多列也不漏。 */
+    const soldOut = [];
+    dims.forEach(d => {
+      d.values = d.values.filter(v => {
+        const out = v.stock === 0 || /已?售罄|无货|缺货|暂无库存|已下架/.test(String(v.name || ''));
+        if (out) soldOut.push(v.name);
+        return !out;
+      });
+    });
+    for (let i = dims.length - 1; i >= 0; i--) if (!dims[i].values.length) dims.splice(i, 1);   // 整维都没货 → 不列这一维
     // 组合值（【父】子）：整维都能拆开时，格子按「父规格 / 子规格」两列显示（拆的是页面原值，不交叉、不新造组合）
     dims.forEach(d => {
       if (d.values.length && d.values.every(v => v.parts)) d.partLabels = ['父规格', '子规格'];
     });
+    dims.soldOut = soldOut;
     // 规格块在整页文本里的结束位置（给 pickPrices 当界线用：这之后的价格都是「同款推荐」里别的商品）
     dims.blockEnd = valuePair.reduce((mx, v) => Math.max(mx, (v.pos || 0) + String(v.name || '').length), 0);
     return dims;
@@ -412,6 +425,7 @@
       crossBorderOnly: /是否跨境出口专供货源\s*\|?\s*是/.test(text) ? true : (/是否跨境出口专供货源\s*\|?\s*否/.test(text) ? false : null),
       hasPatent: /是否有专利\s*\|?\s*是/.test(text) ? true : (/是否有专利\s*\|?\s*否/.test(text) ? false : null),
       specs,
+      soldOut: specs.soldOut || [],                     // 已售罄、没列入的规格值（页面会提示，别让它们悄悄消失）
       colors: specs.length ? specs[0].values : [],      // 兼容：父规格的值 = 以前说的「颜色」
       specLabel: specs.length ? specs[0].label : null,
       priceTiers: pickPrices(text, specs.blockEnd),

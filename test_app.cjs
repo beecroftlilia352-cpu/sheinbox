@@ -386,5 +386,16 @@ near('双规格 AI 行：一件装行的定价 = 27.77（不是按两件算的 5
 check('双规格 AI 行：两件装行件数 = 2', aiTwo[1] && aiTwo[1].pcs === 2, aiTwo[1] && aiTwo[1].pcs);
 check('双规格 AI 行：2 色混搭行件数 = 2（同维度两个值相加）', aiTwo[2] && aiTwo[2].pcs === 2, aiTwo[2] && aiTwo[2].pcs);
 
+// 混搭行：同一维度里挑了多个值 → 那一列必须把值都列出来（否则表里看不到，件数看着莫名其妙）
+const mixTwo = V.buildVariants(twoDimProd, { unitCost: 11.5, costMode: 'spec', aiPlan: { rows: [
+  { kind: '混搭', values: ['白色【3411牛角】', '粉红【3411牛角】', '36-37适合35-36码', '40-41适合39-40码'],
+    pcs: 4, accessory: false, nameEn: 'Mix x4' }
+] } });
+check('混搭行：4 个值（2 色 × 2 码）→ 件数 = 4', mixTwo[0] && mixTwo[0].pcs === 4, mixTwo[0] && mixTwo[0].pcs);
+check('混搭行：颜色列把两个颜色都列出来', /白色.*粉红|粉红.*白色/.test((mixTwo[0] && mixTwo[0].spec['颜色']) || ''),
+  mixTwo[0] && mixTwo[0].spec['颜色']);
+check('混搭行：尺码列把两个尺码都列出来（以前只显示第一个，看不出为什么是 4 件）',
+  /36-37.*40-41|40-41.*36-37/.test((mixTwo[0] && mixTwo[0].spec['尺码']) || ''), mixTwo[0] && mixTwo[0].spec['尺码']);
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

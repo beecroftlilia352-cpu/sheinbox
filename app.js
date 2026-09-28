@@ -135,7 +135,17 @@
       const t = join(vals.map(v => (v ? v.name : '')).filter(Boolean));
       o[primary.label] = t.length > CELL_MAX ? t.slice(0, CELL_MAX - 1) + '…' : t;
     }
-    (combo || []).forEach(x => { o[x.dim.label] = x.value.name; });
+    // 非首维：一行可能挑了同一维度里的多个值（混搭）→ 全列出来，
+    // 否则表里只看得到其中一个，件数却按全部值算，看着就是「件数莫名其妙」
+    const byDim = new Map();
+    (combo || []).forEach(x => {
+      if (!byDim.has(x.dim.label)) byDim.set(x.dim.label, []);
+      byDim.get(x.dim.label).push(x.value.name);
+    });
+    byDim.forEach((names, lab) => {
+      const t = join(names);
+      o[lab] = t.length > CELL_MAX ? t.slice(0, CELL_MAX - 1) + '…' : t;
+    });
     return o;
   }
 

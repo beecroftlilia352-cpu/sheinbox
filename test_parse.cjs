@@ -130,5 +130,24 @@ eq('拼接地板：10片装那个值自己带 23 的标价', ((pd.specs[0].value
 eq('拼接地板：推荐位里别的商品的价格不许进档位（¥35 是别人的）', (pd.priceTiers || []).every(t => t.price !== 35), true);
 eq('拼接地板：拿货价 = 2.12（单件出货成本）', pd.suggestedUnitCost, 2.12);
 
+/* 已售罄的规格值不抓取（用户要求）：库存 0 / 名字里写着售罄的，都不进规格；
+ * 库存数据本身没有的（页面没写）必须保留 —— 不猜。 */
+// 直接改真实 fixture（卷发棒 897021596330，功率 9 个值）：把第 1 个值改成库存 0、
+// 第 2 个值名字加上「【已售罄】」，看它们是不是都被踢掉，而没写库存的照旧保留
+const baseFx = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-897021596330.txt'), 'utf8');
+const soText = baseFx.replace(/库存8678个/, '库存0个')
+  .replace('【英文版.美规】紫色全自动32mm', '【英文版.美规】紫色全自动32mm【已售罄】');
+const soProd = P.parse(soText, { url: 'https://detail.1688.com/offer/897021596330.html' });
+eq('已售罄：库存 0 的规格值不进规格（9 个值 → 7 个）', (soProd.specs[0].values || []).length, 7);
+eq('已售罄：名字里带「已售罄」的也不进规格', (soProd.specs[0].values || []).some(v => /已售罄/.test(v.name)), false);
+check('已售罄：库存 0 那个值记在 soldOut 里（页面会提示，不许悄悄消失）',
+  (soProd.soldOut || []).some(n => /欧规.*紫色/.test(n)), JSON.stringify(soProd.soldOut));
+check('已售罄：页面没写库存的值照旧保留（不猜）',
+  (soProd.specs[0].values || []).some(v => /欧规/.test(v.name)), (soProd.specs[0].values || []).map(v => v.name).join(' / ').slice(0, 80));
+
+// 整维都售罄 → 这一维不列（否则表里会出现一列空规格）
+const aoProd = P.parse(baseFx.replace(/库存\d+个/g, '库存0个'), { url: 'https://detail.1688.com/offer/897021596330.html' });
+eq('已售罄：整维都售罄 → 不列这一维', (aoProd.specs || []).length, 0);
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);
