@@ -14,6 +14,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -63,37 +65,95 @@ NODE = find_node()
 
 BROWSER_MARK = os.path.join(ROOT, ".tool-browser.json")
 USER_CHROME_MARK = os.path.join(ROOT, ".use-my-chrome.json")
+LOG_DIR = os.path.join(ROOT, "logs")
+
+
+def _cdp_ok(port, timeout=0.6):
+    """端口开着不等于能用：实例僵死时 TCP 连得上、CDP 却不答话（这就是「抓不到浏览器」的真身）。
+    只有 /json/version 真的返回浏览器版本，才算这个抓取浏览器可用。"""
+    if not port:
+        return False
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/json/version" % int(port), timeout=timeout) as r:
+            info = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        return bool(info.get("Browser"))
+    except Exception:
+        return False
 
 
 def _mark_state(path, label):
-    """标记文件 + pid + 端口一起判断这个浏览器还在不在（端口探测只给 0.25 秒）"""
+    """标记文件 + 端口 + CDP 一起判断这个浏览器还在不在、还能不能用"""
     try:
         with open(path, "r", encoding="utf-8") as f:
             m = json.load(f)
     except Exception:
-        return {"running": False, "port": None, "mode": label}
+        return {"running": False, "port": None, "mode": label, "cdpOk": False}
     pid, port = m.get("pid"), m.get("port")
-    if pid and not _pid_alive(pid):
-        return {"running": False, "port": port, "mode": label, "note": "进程已退出"}
     if not port:
-        return {"running": False, "port": None, "mode": label}
+        return {"running": False, "port": None, "mode": label, "cdpOk": False, "note": "标记里没有端口"}
+    open_port = False
     try:
         with socket.create_connection(("127.0.0.1", int(port)), timeout=0.25):
-            return {"running": True, "port": int(port), "mode": label}
+            open_port = True
     except Exception:
-        return {"running": False, "port": int(port), "mode": label}
+        open_port = False
+    if not open_port:
+        return {"running": False, "port": int(port), "mode": label, "cdpOk": False,
+                "note": "进程已退出" if (pid and not _pid_alive(pid)) else "端口没在监听"}
+    cdp = _cdp_ok(port)
+    out = {"running": True, "port": int(port), "mode": label, "cdpOk": cdp}
+    if not cdp:
+        # 端口开着、CDP 不答话 —— 典型的僵死实例，抓取连上去会干等
+        out["note"] = "端口开着但调试协议不答话（实例可能僵死）→ 点「重启抓取浏览器」再试"
+    return out
 
 
 def browser_state():
     """抓取用浏览器状态：优先报「你自己的 Chrome」（那种模式不会弹新窗口）"""
     own = _mark_state(USER_CHROME_MARK, "你自己的 Chrome")
-    if own["running"]:
-        return own
     tool = _mark_state(BROWSER_MARK, "工具浏览器（独立窗口）")
+    if own["running"]:
+        out = dict(own)
+        out["restartable"] = False          # 用户的 Chrome 工具不会去重启
+        return out
     if tool["running"]:
-        return tool
-    return {"running": False, "port": None, "mode": "未打开",
+        out = dict(tool)
+        out["restartable"] = True              # 工具浏览器可以重启（僵死时更需要）
+        out["myChrome"] = own
+        return out
+    return {"running": False, "port": tool.get("port"), "mode": "未打开", "cdpOk": False,
+            "restartable": False, "note": "还没开过抓取浏览器，点「读取商品」会自动开一个",
             "myChrome": own, "toolBrowser": tool}
+
+
+def restart_browser():
+    """清掉僵死的工具浏览器并重开一个（**绝不动用户自己的 Chrome**）"""
+    if not NODE:
+        return {"ok": False, "message": "没找到 node，重启不了"}
+    script = os.path.join(ROOT, "tool-browser.cjs")
+    if not os.path.isfile(script):
+        return {"ok": False, "message": "找不到 tool-browser.cjs"}
+    env = dict(os.environ)
+    env["NODE_PATH"] = NODE_MODULES
+    try:
+        pr = subprocess.run([NODE, script, "--restart"], cwd=ROOT, env=env,
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=90)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "重启抓取浏览器超时（90 秒），可能有两个实例在抢同一个 profile"}
+    last = ""
+    for line in (pr.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                last = json.loads(line)
+            except Exception:
+                pass
+    err = (pr.stderr or "").strip().splitlines()
+    if isinstance(last, dict):
+        last.setdefault("log", err[-3:])
+        return last
+    return {"ok": False, "message": "重启没有返回结果", "log": (err or [(pr.stdout or "")[:200]])[-3:]}
 
 
 def run_job(job_id, url):
@@ -107,6 +167,32 @@ def run_job(job_id, url):
     cmd = [NODE, os.path.join(ROOT, "fetch-1688.cjs"), url,
            "--profile", PROFILE_DIR, "--timeout", str(FETCH_TIMEOUT)]
     job["log"] = []
+    # 每个任务另存一份日志文件：进程被强杀时（同一时间点两次 / 服务被重启）内存里的 log 可能一个字都没有，
+    # 于是用户只看到「抓取失败」却没有任何原因 —— 那种没法排查，必须留痕。
+    jlog = None
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        jlog = open(os.path.join(LOG_DIR, "job-%s.log" % job_id), "a", encoding="utf-8", errors="replace")
+        jlog.write("# %s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), url))
+        jlog.flush()
+    except Exception:
+        jlog = None
+
+    def keep(line):
+        job["log"].append(line)
+        if len(job["log"]) > 80:
+            job["log"] = job["log"][-80:]
+        file_only(line)
+
+    def file_only(line):
+        """只写进任务日志文件，不进内存里的 log（内存里那份是给页面看的，逐步状态另有渠道）"""
+        if jlog:
+            try:
+                jlog.write(line + "\n")
+                jlog.flush()
+            except Exception:
+                pass
+
     try:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
@@ -126,22 +212,32 @@ def run_job(job_id, url):
                     st = json.loads(line[len("@@STATUS "):])
                     st.setdefault("state", job.get("state"))
                     job.update(st)
+                    # 逐步状态也写进任务日志文件：进程要是被强杀，这就是唯一的现场记录
+                    file_only("%s %s" % (st.get("state") or "", st.get("hint") or ""))
                 except Exception:
-                    job["log"].append(line)
+                    keep(line)
             elif line.startswith("@@PRODUCT "):
                 try:
                     job["product"] = json.loads(line[len("@@PRODUCT "):])
                     job["state"] = "ready"
+                    np = len((job["product"].get("specs") or []))
+                    file_only("已收到商品数据：%d 个规格维度（%s）" % (np, job["product"].get("title") or ""))
                 except Exception as e:
                     job["state"] = "error"
                     job["hint"] = "商品数据解析失败：" + str(e)
             else:
-                job["log"].append(line)
-                if len(job["log"]) > 80:
-                    job["log"] = job["log"][-80:]
-        proc.wait()
+                keep(line)
+        rc = proc.wait()
         if job.get("state") not in ("ready", "error"):
-            job["state"] = "error" if proc.returncode else "ready"
+            if rc == 0 and job.get("product"):
+                job["state"] = "ready"
+            else:
+                # 走到这里说明进程没说结果就退了：必须给用户一个能看懂的原因，而不是留着他上一步的提示
+                job["state"] = "error"
+                job["hint"] = ("抓取进程中途退出了（退出码 %s），最后一步是「%s」。常见原因：同一时间点了两次抓取，"
+                               "或抓取浏览器卡住被清掉重开。看一眼 logs/job-%s.log，然后重新点一次「读取商品」。"
+                               % (rc, job.get("hint") or "启动抓取浏览器", job_id))
+                keep("[server] 抓取进程退出码 %s" % rc)
         if job.get("state") == "ready" and job.get("product"):
             with LOCK:
                 CACHE[norm_url(url)] = {"at": time.time(), "product": job["product"]}
@@ -150,6 +246,11 @@ def run_job(job_id, url):
         job["state"] = "error"
         job["hint"] = "抓取进程启动失败：" + str(e)
     finally:
+        if jlog:
+            try:
+                jlog.close()
+            except Exception:
+                pass
         if RUNNING.get("id") == job_id:
             RUNNING["id"] = None
 
@@ -279,13 +380,18 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path not in ("/api/fetch", "/api/ai-plan"):
+        if u.path not in ("/api/fetch", "/api/ai-plan", "/api/browser-restart"):
             return self._json({"error": "not found"}, 404)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             return self._json({"error": "bad json"}, 400)
+        if u.path == "/api/browser-restart":
+            # 只重启工具自己的那个抓取浏览器；用户自己的 Chrome 一律不动
+            res = restart_browser()
+            print("[browser] 重启抓取浏览器：%s" % str(res.get("message") or res)[:160])
+            return self._json(res)
         if u.path == "/api/ai-plan":
             prod = data.get("product") or {}
             if not ((prod.get("specs") or []) or (prod.get("colors") or [])):

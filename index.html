@@ -72,6 +72,7 @@
       <button id="btnDemo" class="ghost">载入示例（离线）</button>
     </div>
     <div id="status" class="status"></div>
+    <div id="browserBox" class="hint" style="margin-top:6px"></div>
     <div class="hint" style="margin-top:6px">
       抓取用的浏览器有两种模式，自动挑：<b>① 你自己的 Chrome</b>（推荐，只在你的浏览器里新开标签页、用你的登录态；
       先双击一次 <code>use-my-chrome.cmd</code> 让它带调试端口重开，之后就一直用它）
@@ -531,6 +532,42 @@ function renderRows() {
   else $('formula').textContent = ROWS[SEL].sku + '  ' + ROWS[SEL].nameCn + '\n' + V.formulaLines(ROWS[SEL], params()).join('\n');
 }
 
+/* ---------- 抓取浏览器状态：僵死实例要看得见，并且能一键重开 ---------- */
+/* 为什么要有这块：曾经出现过「端口在监听、但 CDP 会话僵死」的实例，抓取连上去要干等 30 秒才失败，
+ * 用户只说得出「抓不到浏览器」。现在把状态摆出来，并提供一键重启（只重启工具自己的浏览器）。 */
+let BROWSER_STATE = null;
+async function browserInfo() {
+  try {
+    const h = await (await fetch('/api/health')).json();
+    BROWSER_STATE = h.browser || null;
+  } catch (e) { BROWSER_STATE = null; }
+  renderBrowserBox();
+}
+function renderBrowserBox() {
+  const b = BROWSER_STATE, box = $('browserBox');
+  if (!box) return;
+  if (!b) { box.innerHTML = ''; return; }
+  let txt;
+  if (b.running && b.cdpOk) txt = '✅ 抓取浏览器：' + b.mode + '（端口 ' + b.port + '）可用';
+  else if (b.running) txt = '⚠️ 抓取浏览器：' + b.mode + '（端口 ' + b.port + '）<b>端口开着但连不上</b>';
+  else txt = '⏸ 抓取浏览器：' + (b.note || '未打开');
+  box.innerHTML = txt + (b.running && b.note ? ' — ' + b.note : '') +
+    (b.restartable ? ' <button id="btnBrowserRestart" class="ghost" style="padding:2px 8px">重启抓取浏览器</button>' : '');
+  const btn = $('btnBrowserRestart');
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '正在重启…';
+    try {
+      const r = await (await fetch('/api/browser-restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      setStatus(r.ok ? 'ready' : 'error', r.message || (r.ok ? '抓取浏览器已重开' : '重启失败'));
+      if (r.log && r.log.length) setStatus(r.ok ? 'ready' : 'error', r.message || '', r.log.join('<br>'));
+    } catch (e) {
+      setStatus('error', '重启请求没发出去：' + e.message);
+    }
+    await browserInfo();
+  };
+}
+
 /* ---------- 自动抓取 ---------- */
 async function startFetch() {
   const url = $('url').value.trim();
@@ -555,9 +592,11 @@ async function startFetch() {
       if (s.state === 'ready' && s.product) {
         clearInterval(TIMER); $('btnFetch').disabled = false;
         onProduct(s.product, '（自动抓取）');
+        browserInfo();
       } else if (s.state === 'error' || s.state === 'timeout') {
         clearInterval(TIMER); $('btnFetch').disabled = false;
         if (s.log && s.log.length) setStatus(s.state, s.hint || '', s.log.slice(-3).join('<br>'));
+        browserInfo();
       }
     } catch (e) { /* 服务重启等瞬时错误继续轮询 */ }
   }, 1200);
@@ -637,6 +676,7 @@ $('planMode').addEventListener('change', () => {
   AI_PLAN = null; AI_NOTE = ' ｜ 变种计划：引擎规则'; $('aiBox').innerHTML = ''; OV = {}; regen(true);
 });
 $('btnFetch').onclick = startFetch;
+if (location.protocol !== 'file:') browserInfo();      // 打开页面就把抓取浏览器状态摆出来
 $('url').addEventListener('keydown', e => { if (e.key === 'Enter') startFetch(); });
 
 /* ---------- 示例数据（离线可玩） ---------- */

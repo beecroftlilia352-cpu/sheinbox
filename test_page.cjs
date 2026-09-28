@@ -312,8 +312,48 @@ async function aiPageChecks() {
     check('CSV 含 SKU 前缀 YQ-', /YQ-\d{4}/.test(lines[1]), lines[1]);
   }
   await aiPageChecks();
+  await browserBoxChecks();
   finish();
 })();
+
+/* ---------- 抓取浏览器状态：僵死实例要看得见，也要能一键重开 ---------- */
+async function browserBoxChecks() {
+  const box = $('browserBox');
+  check('① 区域有「抓取浏览器」状态行', !!box);
+  const orig = w.fetch, origStatus = $('status').textContent;
+  const calls = [];
+  w.fetch = async u => {
+    calls.push(u);
+    if (u === '/api/health') {
+      return { json: async () => ({ ok: true, browser: { running: true, mode: '工具浏览器（独立窗口）',
+        port: 9222, cdpOk: false, restartable: true, note: '端口开着但连不上（实例僵死）→ 点「重启抓取浏览器」' } }) };
+    }
+    if (u === '/api/browser-restart') {
+      return { json: async () => ({ ok: true, mode: 'toolBrowser', port: 9244, message: '抓取浏览器已重开（端口 9244）' }) };
+    }
+    return { json: async () => ({}) };
+  };
+  await w.eval('browserInfo()');
+  await w.eval('new Promise(r => setTimeout(r, 20))');
+  check('端口在听但连不上 → 明确告警（不再骗人说是「运行中」）', /连不上|僵死/.test(box.textContent), box.textContent);
+  check('告警状态给出「重启抓取浏览器」按钮', !!$('btnBrowserRestart'));
+
+  $('btnBrowserRestart').click();
+  await w.eval('new Promise(r => setTimeout(r, 40))');
+  check('点重启会 POST /api/browser-restart', calls.includes('/api/browser-restart'), calls.join(','));
+  check('重启结果（含端口）显示在状态行', /已重开/.test($('status').textContent), $('status').textContent);
+
+  // 健康、且用的是用户自己的 Chrome 时：显示可用，并且**不给**重启按钮（工具不该动用户的浏览器）
+  w.fetch = async () => ({ json: async () => ({ ok: true, browser: {
+    running: true, mode: '你自己的 Chrome', port: 9223, cdpOk: true, restartable: false } }) });
+  await w.eval('browserInfo()');
+  await w.eval('new Promise(r => setTimeout(r, 20))');
+  check('用你自己的 Chrome：显示可用且不给重启按钮（工具不动用户的浏览器）',
+    /可用/.test(box.textContent) && !$('btnBrowserRestart'), box.textContent);
+  w.fetch = orig;
+  $('status').textContent = origStatus;
+  box.innerHTML = '';
+}
 
 function finish() {
   console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
