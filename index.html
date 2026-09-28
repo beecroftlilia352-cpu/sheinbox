@@ -505,10 +505,23 @@ function aiBoxHtml(j) {
   if (j.truncated) parts.push('· 行数超上限：只保留前 ' + j.truncated.kept + ' 行（本来 ' + j.truncated.total + ' 行）');
   return parts.join('<br>');
 }
+/* 同一时刻只允许一次「问 DeepSeek」。
+ * 为什么：可以触发它的地方不止按钮 —— 读完商品会自动排一版、切到 AI 档会自动排一版、点「重新生成规格」在 AI 档下也再排一版。
+ * 两次请求同时在飞就会出现「后回来的失败把先回来的成功计划冲掉」，表直接回落引擎（用户报过）。
+ * 现在：正在跑时再触发 → 只记一个旗标，等这次结束再用最新参数补排一次（并发恒为 1）。 */
+let AI_SEQ = 0, AI_RUNNING = 0, AI_QUEUED = false;
 async function aiPlanNow() {
   if (!PRODUCT) { setStatus('error', '还没有商品：先「读取商品」，再让 DeepSeek 排变种。'); return; }
   const btn = $('btnAi');
   const p = params();
+  if (AI_RUNNING) {
+    AI_QUEUED = true;                       // 已经有请求在飞：不并发，等它回来补排一次
+    $('aiBox').innerHTML = '⏳ DeepSeek 正在排这一版 —— 这次触发会等它回来后再用最新参数补排一次，不会两次互相覆盖。';
+    $( 'btnAi').disabled = true;
+    return;
+  }
+  const seq = ++AI_SEQ;
+  AI_RUNNING = seq;
   btn.disabled = true;
   AI_NOTE = ' ｜ 变种计划：DeepSeek 正在思考…';
   $('aiBox').innerHTML = '⏳ 正在把规格数据发给 DeepSeek 排变种（一般 5~25 秒）…';
@@ -522,6 +535,7 @@ async function aiPlanNow() {
       } })
     });
     const j = await r.json().catch(() => ({}));
+    if (seq !== AI_SEQ) return;               // 又有更新的一次在跑/已跑完 → 这次结果作废，别覆盖别人的
     if (!j.ok) {
       AI_PLAN = null; OV = {};
       AI_NOTE = ' ｜ 变种计划：DeepSeek 没成，已按引擎规则排';
@@ -546,9 +560,17 @@ async function aiPlanNow() {
   } catch (e) {
     AI_PLAN = null; OV = {};
     AI_NOTE = ' ｜ 变种计划：DeepSeek 调用失败，已按引擎规则排';
-    $('aiBox').innerHTML = '<span style="color:#dc2626">✖ 调用失败：' + esc(e.message) + '</span>';
-    regen(true);
-  } finally { btn.disabled = false; }
+    if (seq === AI_SEQ) {
+      $('aiBox').innerHTML = '<span style="color:#dc2626">✖ 调用失败：' + esc(e.message) + '</span>';
+      regen(true);
+    }
+  } finally {
+    if (AI_RUNNING === seq) {
+      AI_RUNNING = 0;
+      btn.disabled = false;
+      if (AI_QUEUED) { AI_QUEUED = false; setTimeout(aiPlanNow, 60); }   // 期间又被触发过 → 用最新参数补排一次
+    }
+  }
 }
 
 /* 列清单：整维是组合值（【父】子）→ 展开成「父规格 / 子规格」两列；否则一维一列。

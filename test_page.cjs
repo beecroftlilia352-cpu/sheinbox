@@ -297,6 +297,16 @@ async function aiPageChecks() {
   check('④ 区标题那行也标明「已参考补充条件」', /已参考你的补充条件/.test($('rowHint').textContent), $('rowHint').textContent.slice(-60));
   check('定价仍是本地引擎算的（不是 AI 给的数）', parseFloat(cell(0, priceCol)) > 0, cell(0, priceCol));
 
+  /* 并发触发（读完商品自动排一版 + 手点按钮撞一起）不能同时飞：先飞的成功、后飞的失败会把计划冲掉 */
+  let calls2 = 0;
+  w.fetch = () => new Promise(resolve => { calls2++; setTimeout(() => resolve({ json: async () => plan }), 80); });
+  w.eval('aiPlanNow(); aiPlanNow();');                       // 模拟两次触发叠在一起
+  await w.eval('new Promise(r => setTimeout(r, 30))');
+  check('两次触发叠一起 → 只飞一次请求（第二次排队）', calls2 === 1, '请求数 ' + calls2);
+  await w.eval('new Promise(r => setTimeout(r, 400))');
+  check('第一次回来后，排队的那次才补排（总请求 2 次，不会互相覆盖）', calls2 === 2, '请求数 ' + calls2);
+  check('补排完成后按钮恢复可点', $('btnAi').disabled === false);
+
   w.fetch = async () => ({ json: async () => ({ ok: false, error: 'HTTP 429 太频繁' }) });
   $('btnAi').click();
   await w.eval('new Promise(r => setTimeout(r, 40))');

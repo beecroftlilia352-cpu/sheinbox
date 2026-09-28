@@ -52,7 +52,13 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
       没有自带件数就是 1。**只有这种行才算覆盖了这个值。**
       · **绝不许把基础行改成多件装（pcs>1）或往一行里塞同一维度的两个值来充当覆盖** ——
         那样整张表里就没有一件装可上架了，卖家会以为件数被凭空翻了倍。
+      · **覆盖行不要铺满**：每个规格值有一行就够 —— 规格组合很多（比如 9 色 × 5 码 = 45 个组合）
+        而行数上限只有几十行时，把整张表塞成几十行单品 = 一行设计款都没有。这种商品要**主动精简**：
+        覆盖行只挑代表（每色一行、每码至少出现一次就够），剩下的行数全留给 b 里的设计款。
+        真有哪个值这版不上架，写进 skipped 说原因（但别用它来躲工作量）。
       · 确实不该上架的（如「清仓随机款」这类不确定款）才放进 skipped 并写原因。
+      · skipped 的 value 只能是数据里**逐个出现**的那个值名本身 —— 别写「颜色+尺码」拼出来的组合，
+        页面上不存在的组合不用列、也不用管（组合太多时靠少排几行来精简，不是靠 skipped）。
    b. 差异化（这是重点，**必须做**）：在覆盖行**之外额外追加**真正不一样的卖法，让同一件货有几档。
       **至少要有 3~5 行是「设计出来的」**（多件装 / 混搭 / 大包装 / 套装），不管规格值多少 —— 一个商品只给
       「每个规格值一行」等于没设计。手段按商品自己判断（别生搬）：
@@ -127,14 +133,16 @@ async function ask(cfg, messages, timeoutMs) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
       // thinking 必须显式关掉、max_tokens 要够大，否则这个接口会 HTTP 200 但 content 为空（踩过）
-      body: JSON.stringify({ model: cfg.model, messages, max_tokens: 4000, temperature: 0.2, thinking: { type: 'disabled' } }),
+      // max_tokens 要够大：规格多的商品（36 行 × 中英文名）4000 会被截断 → 返回半截 JSON → 解析失败
+      body: JSON.stringify({ model: cfg.model, messages, max_tokens: 8000, temperature: 0.2, thinking: { type: 'disabled' } }),
       signal: ac.signal
     });
     const text = await r.text();
     let json = {};
     try { json = JSON.parse(text); } catch (_) { json = {}; }
-    const content = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
-    return { http: r.status, content, usage: json.usage || null, raw: text.slice(0, 400) };
+    const choice = (json.choices && json.choices[0]) || {};
+    const content = (choice.message && choice.message.content) || '';
+    return { http: r.status, content, finish: choice.finish_reason || null, usage: json.usage || null, raw: text.slice(0, 400) };
   } finally { clearTimeout(timer); }
 }
 
@@ -162,6 +170,7 @@ function clampCountInName(name, cap) {
 
 /* ---------- 硬校验：AI 只许用页面上的值，钱不归它管 ---------- */
 function validatePlan(product, plan) {
+  let pcsAligned = 0, pcsClamped = 0;      // 名字里写了件数时的计数（以前只在用到时才 ++，没声明 → 直接 ReferenceError 崩掉整轮）
   const errs = [];
   const all = new Map();                       // 值名 → 值对象（允许重名不同编码：按名字比对即可）
   ((product && product.specs) || []).forEach(d => (d.values || []).forEach(v => all.set(String(v.name).trim(), v)));
@@ -239,10 +248,20 @@ function validatePlan(product, plan) {
   const skipSet = new Set(skipped.map(s => s.value));
   const missing = [...all.keys()].filter(v => !used.has(v) && !skipSet.has(v));
   if (missing.length) errs.push('这些规格值既没上架也没说明跳过：' + missing.join('、'));
+  /* skipped 里出现数据里没有的值 —— 典型是「柠檬黄 44/45（标准尺码）」这种**页面上并不存在的组合**
+   * （柠檬黄根本没有 44/45 码）。那不是错误：它想跳过一个本来就没有的东西，没有任何副作用。
+   * 以前这直接判失败，白瞎一整轮重试（用户报过三次都不通过）。现在忽略掉，只在备注里说一声。 */
   const bogusSkip = skipped.filter(s => !all.has(s.value)).map(s => s.value);
-  if (bogusSkip.length) errs.push('skipped 里出现数据里没有的规格值：' + bogusSkip.join('、'));
+  const keptSkip = skipped.filter(s => all.has(s.value));
+  const notes = [];
+  if (pcsAligned) notes.push('有 ' + pcsAligned + ' 行的件数按它名字里写的数字对齐了（模型写的件数与字段不一致时以名字为准）');
+  if (pcsClamped) notes.push('有 ' + pcsClamped + ' 行的名字件数超过上限，已夹到 ' + MAX_PCS + ' 并同步改了名字里的数字');
+  if (bogusSkip.length) {
+    notes.push('skipped 里有 ' + bogusSkip.length + ' 个页面上没有的值（多半是想跳过不存在的组合，如「颜色+尺码」），已忽略：'
+      + bogusSkip.slice(0, 5).join('、') + (bogusSkip.length > 5 ? ' 等' : ''));
+  }
 
-  return { errs, rows, used, skipped, nameCnDropped };
+  return { errs, rows, used, skipped: keptSkip, notes, nameCnDropped };
 }
 
 /* 把 AI 的计划翻译成引擎能直接用的行（价格/成本/利润仍由 app.js 算） */
@@ -262,6 +281,7 @@ function normalize(product, plan, opts) {
     if (kk && vv) en[kk] = vv;
   });
   const notes = (Array.isArray(plan.notes) ? plan.notes : []).map(x => String(x).slice(0, 300)).slice(0, 6);
+  (v.notes || []).forEach(x => { if (notes.indexOf(x) < 0) notes.push(x); });
   const rowsNoCn = (v.nameCnDropped || []).length;
   const rowsWithCn = rows.filter(r => r.nameCn).length;
   if (rowsNoCn) notes.push(`有 ${rowsNoCn} 行的中文名不合规（带价格或太长），这 ${rowsNoCn} 行的中文名改用引擎模板`);
@@ -309,8 +329,12 @@ async function plan(product, params, cfg) {
     }
     const parsed = parseJsonLoose(res.content);
     if (!parsed) {
-      hint = '上一次返回的不是合法 JSON。只输出那个 JSON 对象本身，别加解释、别包代码块。';
-      attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, bad: '返回的不是合法 JSON（没解析出 plan）' });
+      const cut = res.finish === 'length';       // 被 max_tokens 截断：JSON 没写完，光说「不是 JSON」会让人无从下手
+      hint = cut
+        ? '上一次的回复被长度上限截断了（JSON 没写完）。把变种名写短些、行数控制在 ' + maxRows + ' 行以内，只输出那个 JSON 对象。'
+        : '上一次返回的不是合法 JSON。只输出那个 JSON 对象本身，别加解释、别包代码块。';
+      attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, finish: res.finish || null,
+        bad: cut ? '回复被长度上限截断（JSON 没写完）' : '返回的不是合法 JSON（没解析出 plan）' });
       continue;
     }
     const norm = normalize(scoped, parsed, { maxRows, note });

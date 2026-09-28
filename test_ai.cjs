@@ -199,6 +199,42 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   check('模型老返回非 JSON → 明确失败（不是空理由）', r1.ok === false && /不是合法 JSON/.test(r1.error) && !/：$/.test(r1.error), String(r1.error).slice(0, 120));
   check('重试机会给到 3 次', (r1.attempts || []).length === 3 && /3 次都没通过/.test(r1.error), (r1.attempts || []).length + ' 次 ／ ' + String(r1.error).slice(0, 80));
 
+  /* 截断：finish_reason=length → 必须说「被长度上限截断」，不能只说「不是 JSON」 */
+  const srvCut = await mk(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"plan":[{"kind":"单品","values":["灰' } }] }));
+  const rCut = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvCut.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvCut.close();
+  check('回复被截断 → 明确说「长度上限截断」（而不是含糊的「不是 JSON」）',
+    rCut.ok === false && /截断/.test(rCut.error) && /长度/.test(rCut.error), String(rCut.error).slice(0, 120));
+
+  /* skipped 里写页面上不存在的组合（「颜色+尺码」，该颜色没这个码）→ 忽略即可，不该判失败 */
+  const okPlan = {
+    plan: [{ kind: '单品', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey', nameCn: '灰色' },
+           { kind: '单品', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White', nameCn: '白色' },
+           { kind: '单品', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Random', nameCn: '清仓' },
+           { kind: '单品', values: ['36-37适合35-36码'], pcs: 1, nameEn: '36-37', nameCn: '36-37' }],
+    skipped: [{ value: '灰色30cm*30cm 44/45（标准尺码）', reason: '这个颜色没有这个码' }],
+  };
+  const srvSkip = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(okPlan) } }] }));
+  const rSkip = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvSkip.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvSkip.close();
+  check('skipped 里写了页面上不存在的组合 → 忽略而不是判失败（用户报过因此三次都不通过）',
+    rSkip.ok === true, String(rSkip.error || '').slice(0, 140));
+  check('被忽略的 skipped 会在备注里说明', /页面上没有的值/.test((rSkip.notes || []).join('；')), JSON.stringify((rSkip.notes || []).slice(-2)));
+
+  /* 名字里写了件数（claim）时会走对齐/夹取分支 —— 那两个计数器以前没声明，一走就 ReferenceError 把整轮打崩 */
+  const claimPlan = {
+    plan: [{ kind: '单品', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey 2 Pack', nameCn: '灰色 两件装' },
+           { kind: '单品', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White', nameCn: '白色' },
+           { kind: '单品', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Random', nameCn: '清仓' },
+           { kind: '单品', values: ['36-37适合35-36码'], pcs: 1, nameEn: '36-37', nameCn: '36-37' }],
+  };
+  const srvClaim = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(claimPlan) } }] }));
+  const rClaim = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvClaim.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvClaim.close();
+  check('名字里写了件数 → 件数按名字对齐，且不再抛 ReferenceError',
+    rClaim.ok === true && (rClaim.rows || [])[0] && (rClaim.rows[0].pcs === 2), rClaim.ok ? '第一行 pcs=' + (rClaim.rows[0] || {}).pcs : String(rClaim.error).slice(0, 120));
+  check('对齐过的行会在备注里说明', /按它名字里写的数字对齐/.test((rClaim.notes || []).join('；')), JSON.stringify((rClaim.notes || []).slice(-1)));
+
   const srv2 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ plan: [{ kind: 'x', values: ['数据里没有的值'], pcs: 1, nameEn: 'Y', nameCn: '值' }] }) } }] }));
   const r2 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srv2.address().port, model: 'x', apiKey: 'k', hasKey: true });
   srv2.close();
