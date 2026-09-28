@@ -175,6 +175,50 @@ function findBrowser() {
 
   const page = PAGE;
   const parse = require('./parse-1688.js');
+
+  /* 页面内嵌的「规格组合 → 价/库存」表（skuInfoMap）。
+   * 为什么非要读它：正文里只渲染**默认选中那一个组合**的价，其它颜色的价根本不出现 ——
+   * 「每个规格价格不一样」的商品，只按正文抓就会变成「每行同一个价」（用户报过一次）。
+   * 组合里的规格名是 &gt; 连接的（页面自己的转义），先按 &gt; 拆再解码，避免值名里真带 > 时拆错。 */
+  async function readSkuInfo() {
+    try {
+      const raw = await page.evaluate(() => {
+        const blobs = [...document.querySelectorAll('script')]
+          .map(s => s.textContent || '').filter(t => t.indexOf('skuInfoMap') > -1);
+        const b = blobs.sort((x, y) => y.length - x.length)[0];
+        if (!b) return null;
+        const at = b.indexOf('"skuInfoMap"');
+        const s = b.indexOf('{', at);
+        if (s < 0) return null;
+        let d = 0, q = false, esc = false;              // 花括号配平（考虑字符串与转义）切出这段 JSON
+        for (let i = s; i < b.length; i++) {
+          const c = b[i];
+          if (q) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') q = false; continue; }
+          if (c === '"') { q = true; continue; }
+          if (c === '{') d++;
+          else if (c === '}') { d--; if (!d) { try { return JSON.parse(b.slice(s, i + 1)); } catch (err) { return null; } } }
+        }
+        return null;
+      });
+      if (!raw || typeof raw !== 'object') return null;
+      const dec = x => String(x).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+      const info = {};
+      for (const k of Object.keys(raw)) {
+        const v = raw[k] || {};
+        const raw2 = String(v.specAttrs || k);
+        const names = (raw2.indexOf('&gt;') > -1 ? raw2.split('&gt;') : raw2.split('>'))
+          .map(x => dec(x).trim()).filter(Boolean);
+        if (!names.length) continue;
+        const pf = parseFloat(v.price), nf = parseFloat(v.discountPrice), sf = Number(v.canBookCount);
+        info[names.join('\u0000')] = {
+          price: Number.isFinite(pf) ? pf : null,
+          net: Number.isFinite(nf) ? nf : null,
+          stock: Number.isFinite(sf) ? sf : null,
+        };
+      }
+      return Object.keys(info).length ? info : null;
+    } catch (e) { return null; }
+  }
   const CAPTCHA = /请按住滑块|拖动滑块|滑动验证|安全验证|验证码|slide to verify|Please slide|verify to ensure normal access|x5sec|访问受限|行为验证|点击完成验证|滑块|拖动|异常流量|human/i;
   const PRICEY = /[¥￥]\s*\d/;
   let announced = '';
@@ -299,6 +343,7 @@ function findBrowser() {
     lastProd = JSON.parse(key);
 
     if (stableCount >= 1 && priced) {
+      if (!prod.skuInfo) prod.skuInfo = await readSkuInfo();    // 规格组合价：正文里抓不到，只能读页面数据
       parse.finalize(prod);                                    // 与页面共用同一套收口逻辑
       delete prod.rawText;                                     // 不回传整页文本
       say({ state: 'ready', hint: '抓取完成', elapsed });

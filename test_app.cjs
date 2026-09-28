@@ -397,5 +397,46 @@ check('混搭行：颜色列把两个颜色都列出来', /白色.*粉红|粉红
 check('混搭行：尺码列把两个尺码都列出来（以前只显示第一个，看不出为什么是 4 件）',
   /36-37.*40-41|40-41.*36-37/.test((mixTwo[0] && mixTwo[0].spec['尺码']) || ''), mixTwo[0] && mixTwo[0].spec['尺码']);
 
+/* ---- 规格组合价（页面内嵌 skuInfoMap → prod.skuPrices）：不同颜色不同价，每行按自己那组算 ---- */
+const SKU_SEP = '\u0000';
+const skuProd = {
+  source: { offerId: '1081733292371' },
+  specs: [
+    { label: '颜色', values: [
+      { name: '黄色【小花豹】', code: null, price: 18.41, stock: 3482 },
+      { name: '咖啡【小熊-情侣款】', code: null, price: 11.35, stock: 3485 } ] },
+    { label: '尺码', values: [
+      { name: '36-37【建议拍大一码】', code: null, price: 11.35, stock: 3482 },
+      { name: '38-39【建议拍大一码】', code: null, price: 11.35, stock: 3478 } ] }
+  ],
+  skuPrices: {
+    [['黄色【小花豹】', '36-37【建议拍大一码】'].join(SKU_SEP)]: 18.41,
+    [['黄色【小花豹】', '38-39【建议拍大一码】'].join(SKU_SEP)]: 18.41,
+    [['咖啡【小熊-情侣款】', '36-37【建议拍大一码】'].join(SKU_SEP)]: 11.35,
+    [['咖啡【小熊-情侣款】', '38-39【建议拍大一码】'].join(SKU_SEP)]: 11.35,
+  },
+  skuComboCount: 4,
+};
+const baseRows = V.buildVariants(skuProd, { unitCost: 9.99, costMode: 'spec' });
+const costOfRow = (rows, name) => { const r = rows.find(x => x.nameCn === name); return r ? r.unitCost : null; };
+near('组合价：黄色行 = 18.41（不是默认尺码价）', costOfRow(baseRows, '黄色【小花豹】｜36-37【建议拍大一码】'), 18.41);
+near('组合价：咖啡行 = 11.35（同尺码不同颜色，价不一样）', costOfRow(baseRows, '咖啡【小熊-情侣款】｜36-37【建议拍大一码】'), 11.35);
+check('组合价：不同色的两行价真的不同（用户报的「列表里价格都一样」就该消失）',
+  new Set(baseRows.map(r => r.unitCost)).size === 2,
+  [...new Set(baseRows.map(r => r.unitCost))].join(' / '));
+const mixRows = V.buildVariants(skuProd, { unitCost: 9.99, costMode: 'spec', aiPlan: { rows: [
+  { kind: '混搭', values: ['黄色【小花豹】', '咖啡【小熊-情侣款】', '36-37【建议拍大一码】'], pcs: 2, accessory: false, nameEn: 'Mix x2' },
+  { kind: '多件装', values: ['黄色【小花豹】', '36-37【建议拍大一码】'], pcs: 3, accessory: false, nameEn: 'x3' },
+] } });
+const mixRow = mixRows.find(r => r.kind === '混搭');
+near('组合价：混搭 2 色 × 1 码的每件成本 = (18.41+11.35)/2', mixRow.unitCost, (18.41 + 11.35) / 2);
+near('组合价：混搭行总成本 = 两份相加', mixRow.unitCost * mixRow.pcs, 18.41 + 11.35);
+const comboPackRow = mixRows.find(r => r.kind === '多件装');
+near('组合价：同一组合买 3 件 → 每件还是那一份的价（不会被除成 1/3）', comboPackRow.unitCost, 18.41);
+near('组合价：没有 skuPrices 时行为照旧（回落参数价）',
+  costOfRow(V.buildVariants({ source: { offerId: '1' }, specs: [
+    { label: '颜色', values: [{ name: '黄', code: null, price: null, stock: 1 }] }] }, { unitCost: 9.99, costMode: 'spec' }), '黄'),
+  9.99);
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

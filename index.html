@@ -376,6 +376,7 @@ function onProductInner(prod, note) {
   chip('专利', prod.hasPatent === true ? '有' : prod.hasPatent === false ? '无' : null);
   chip('运费', prod.freightNote);
   chip('拿货价来源', prod.suggestedUnitCostSource);
+  chip('规格组合价', prod.skuComboCount ? '已读到 ' + prod.skuComboCount + ' 个组合的价 —— 每行按自己那组算成本' : null, 'ok');
   const MISS_CN = { title: '标题', price: '价格', colors: '颜色/规格', weight: '重量', boxQty: '箱装数量' };
   if ((prod.missing || []).length) chip('未解析到', prod.missing.map(m => MISS_CN[m] || m).join('、'), 'warn');
   // 已售罄的规格值不列入变种（用户要求），但要说一句 —— 不许悄悄消失

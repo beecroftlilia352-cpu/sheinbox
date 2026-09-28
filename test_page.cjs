@@ -538,6 +538,23 @@ function paramKeepChecks() {
 }
 
 function finish() {
-  console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
+  // 8.99) 规格组合价（页面内嵌 skuInfoMap）：不同颜色不同价 → 表格里成本/定价各算各的
+//    用户报过「明明每个规格价格不一样，为什么列表内的价格都是一样的」——
+//    正文里只有默认组合的价，必须靠组合表，这条断言就是防它回退成「一个价」
+w.eval('PRODUCT = { source:{offerId:"1081733292371"}, title:"组合价测试", colors:[],' +
+  ' specs:[ {label:"颜色",values:[{name:"黄",code:null,price:18.41,stock:9},{name:"咖",code:null,price:11.35,stock:9}]},' +
+  '         {label:"尺码",values:[{name:"A",code:null,price:11.35,stock:9},{name:"B",code:null,price:11.35,stock:9}]} ],' +
+  ' skuPrices:{"黄\u0000A":18.41,"黄\u0000B":18.41,"咖\u0000A":11.35,"咖\u0000B":11.35}, skuComboCount:4 };' +
+  ' PRODUCT.colors = PRODUCT.specs[0].values; onProduct(PRODUCT, "组合价测试");');
+const costs = [...new Set(rows().map((_, i) => tcell(i, /成本/)))];
+check('组合价：表里出现两档成本（18.41 / 11.35，不再是一个价）',
+  costs.length === 2 && costs.indexOf('18.41') > -1 && costs.indexOf('11.35') > -1, costs.join(' / '));
+const priceCols = [...new Set(rows().map((_, i) => tcell(i, /定价/)))];
+check('组合价：定价也跟着分档', priceCols.length > 1, priceCols.join(' / '));
+check('组合价：商品区提示已读到组合价', /规格组合价/.test($('prodChips').textContent) && /4 个组合/.test($('prodChips').textContent),
+  $('prodChips').textContent.replace(/\s+/g, ' ').slice(0, 90));
+check('组合价：一行里带「黄 ｜ A」的格子组合没错位', rows().some((_, i) => new RegExp('黄').test(tcell(i, /颜色/)) && /A|B/.test(tcell(i, /尺码/))));
+
+console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
   process.exit(bad ? 1 : 0);
 }

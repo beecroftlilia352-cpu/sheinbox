@@ -149,5 +149,30 @@ check('已售罄：页面没写库存的值照旧保留（不猜）',
 const aoProd = P.parse(baseFx.replace(/库存\d+个/g, '库存0个'), { url: 'https://detail.1688.com/offer/897021596330.html' });
 eq('已售罄：整维都售罄 → 不列这一维', (aoProd.specs || []).length, 0);
 
+/* 规格组合价（页面内嵌 skuInfoMap）：正文里只有默认组合的价，必须靠它才能算出「每个规格不一样」的价 */
+const fx108 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1081733292371.txt'), 'utf8');
+const SEP = '\u0000';
+const skuInfo = {};
+skuInfo[['黄色【小花豹】', '36-37【建议拍大一码】'].join(SEP)] = { price: 18.41, net: 18.41, stock: 3482 };
+skuInfo[['黄色【小花豹】', '38-39【建议拍大一码】'].join(SEP)] = { price: 18.41, net: 18.41, stock: 3478 };
+skuInfo[['咖啡【小熊-情侣款】', '36-37【建议拍大一码】'].join(SEP)] = { price: 12.20, net: 11.35, stock: 3485 };
+skuInfo[['咖啡【小熊-情侣款】', '38-39【建议拍大一码】'].join(SEP)] = { price: 12.20, net: 11.35, stock: 0 };
+const p108 = P.parse(fx108, { url: 'https://detail.1688.com/offer/1081733292371.html', skuInfo });
+eq('组合价：规格维度 2 级（颜色 + 尺码）', (p108.specs || []).length, 2);
+eq('组合价：读到 4 个组合', p108.skuComboCount, 4);
+eq('组合价：黄色【小花豹】取它两个组合里最低的价', p108.specs[0].values.find(v => v.name === '黄色【小花豹】').price, 18.41);
+eq('组合价：咖啡【小熊-情侣款】= 11.35（折后价优先，不是 12.20）', p108.specs[0].values.find(v => v.name === '咖啡【小熊-情侣款】').price, 11.35);
+check('组合价：同一颜色仅一个组合售罄时不算售罄（库存取最大）', (() => {
+  const v = p108.specs[0].values.find(x => x.name === '咖啡【小熊-情侣款】');
+  return !!v && v.stock === 3485;
+})());
+eq('组合价：按组合算的每行价（价格表本身）',
+  p108.skuPrices[['黄色【小花豹】', '36-37【建议拍大一码】'].join(SEP)], 18.41);
+check('组合价：没进组合表的值保持原样（不瞎填）',
+  (p108.specs[0].values.find(v => v.name === '粉色【小猫咪】') || {}).price == null);
+check('组合价：正文里那个 18.41 的尺码价被组合里的更低值修正（11.35）',
+  (p108.specs[1].values.find(v => v.name === '36-37【建议拍大一码】') || {}).price === 11.35,
+  JSON.stringify((p108.specs[1].values || []).map(v => [v.name, v.price])));
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

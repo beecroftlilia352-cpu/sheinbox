@@ -171,10 +171,29 @@
    * 而 11.5 是**整包 5 件**的价 → 每件 = 11.5 ÷ 5 = 2.30，再由件数乘回去正好等于整包价。
    * 用一个平均价/众数糊到所有行上、或者把整包价当每件价再乘件数，都是错的。
    */
-  function rowUnitCost(vals, pcs, fallback) {
+  function rowUnitCost(vals, pcs, fallback, sku) {
     const fb = (fallback != null && Number.isFinite(Number(fallback))) ? Number(fallback) : null;
     const list = (vals || []).filter(Boolean);
     if (!list.length) return fb;
+    /* 优先用「规格组合价」（页面内嵌 skuInfoMap，解析时折成 prod.skuPrices）：
+     * 一行可能同时挑了同一维度的多个值（混搭），这行 = 它各个组合的价相加，
+     * 再除以「这份组合的天然件数」= 每件成本（3 件装 = 同一组合买 3 次 → 每件还是那份的单价）。
+     * 有它才算得对：正文里只有默认组合的价，按值上的标价算，不同颜色的行会拿到同一个价。 */
+    if (sku && sku.prices && sku.dims && sku.dims.length) {
+      const groups = groupByDim(sku.dims, list);
+      if (groups.length) {
+        let combos = [[]];
+        for (const g of groups) combos = combos.slice(0, 60).flatMap(a => g.slice(0, 14).map(v => a.concat([v])));
+        let total = 0, ok = true;
+        for (const c of combos) {
+          const pr = sku.prices[c.map(v => v.name).join('\u0000')];
+          if (pr == null) { ok = false; break; }
+          total += pr;
+        }
+        const nat = naturalPcsOf(groups);
+        if (ok && total > 0 && nat > 0) return total / nat;
+      }
+    }
     const priceOf = v => (v.price != null && Number.isFinite(Number(v.price))) ? Number(v.price) : null;
     const costOf = v => (priceOf(v) != null ? priceOf(v) : (fb != null ? fb * packQtyOf(v.name) : null));  // 没标价 → 参数单价 × 自带件数
     if (list.some(v => costOf(v) == null)) return fb;
@@ -215,7 +234,7 @@
       const bq = naturalPcsOf(groupByDim(dims, vals));
       if (bq > 1) o.pcs = Math.max(bq, Math.round((n(o.pcs) || 1) / bq) * bq);
       // 成本价怎么取：默认「按各规格自己的标价」（1688 常写成打包阶梯：单片/5片装/10片装价不一样）
-      o.unitCost = (p.costMode === 'param') ? n(p.unitCost) : rowUnitCost(vals, o.pcs, p.unitCost);
+      o.unitCost = (p.costMode === 'param') ? n(p.unitCost) : rowUnitCost(vals, o.pcs, p.unitCost, { prices: product.skuPrices, dims: dims });
       o.enPending = hasCJK(o.nameEn);
       (isBase ? base : extra).push(o);
     };

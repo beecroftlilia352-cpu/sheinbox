@@ -369,6 +369,60 @@
         ? `规格标价里最低的一档（各规格标价不一：${uniqPrices[0]}~${uniqPrices[uniqPrices.length - 1]} 元，共 ${colorPrices.length} 个值）`
         : `规格标价（${colorPrices.length} 个规格值一致）`);
 
+    /* 页面内嵌的「规格组合 → 价/库存」表（抓取时从页面 script 里读的 prod.skuInfo）。
+     * 为什么必须有它：正文里只渲染**默认选中那一个组合**的价，其它颜色的价根本不出现 ——
+     * 「每个规格价格不一样」的多规格商品，只按正文抓就会变成「每行同一个价」。
+     * 折成两样东西（拿不到 skuInfo 时一切照旧）：
+     *   ① product.skuPrices = {"值1\u0000值2": 每件价} → app.js 按一行自己的组合算成本；
+     *   ② 每个规格值的 price/stock 换成它在各组合里的最优值（价取最低、库存取最大）。 */
+    const skuInfo = (product.skuInfo && typeof product.skuInfo === 'object') ? product.skuInfo : null;
+    if (skuInfo) {
+      const SEP = '\u0000';
+      const numOr = x => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x))) ? null : Number(x);
+      const prices = {}, best = new Map();
+      let combos = 0;
+      for (const key of Object.keys(skuInfo)) {
+        const rec = skuInfo[key] || {};
+        const net = numOr(rec.net) != null ? numOr(rec.net) : numOr(rec.price);   // 页面价（折后）优先
+        if (net == null || net <= 0) continue;
+        combos++;
+        prices[key] = net;
+        for (const nm of String(key).split(SEP)) {
+          const cur = best.get(nm) || { price: null, stock: null };
+          cur.price = (cur.price == null || net < cur.price) ? net : cur.price;
+          const st = numOr(rec.stock);
+          if (st != null) cur.stock = (cur.stock == null) ? st : Math.max(cur.stock, st);   // 有一档有货就不算售罄
+          best.set(nm, cur);
+        }
+      }
+      if (combos) {
+        product.skuPrices = prices;
+        product.skuComboCount = combos;
+        const applyV = v => {
+          const b = best.get(v.name);
+          if (!b) return;
+          if (b.price != null) v.price = b.price;
+          if (b.stock != null) v.stock = b.stock;
+        };
+        (product.specs || []).forEach(d => (d.values || []).forEach(applyV));
+        (product.colors || []).forEach(applyV);
+        // 组合价说明某些值其实售罄了（正文里那个价是默认组合的，看不出别的）→ 补一次过滤
+        const soldNow = [];
+        (product.specs || []).forEach(d => {
+          d.values = (d.values || []).filter(v => {
+            const out = v.stock === 0 || /已?售罄|无货|缺货|暂无库存/.test(String(v.name || ''));
+            if (out) soldNow.push(v.name);
+            return !out;
+          });
+        });
+        for (let i = (product.specs || []).length - 1; i >= 0; i--) if (!(product.specs[i].values || []).length) product.specs.splice(i, 1);
+        if (soldNow.length && !product.soldOut) product.soldOut = [];
+        if (soldNow.length) product.soldOut = (product.soldOut || []).concat(soldNow);
+        if ((product.colors || []).length && (product.specs || []).length) product.colors = product.specs[0].values.slice();
+        product.variantsAvailable = (product.specs || []).length ? (product.specs[0].values || []).length : (product.colors || []).length;
+      }
+    }
+
     const rt = product.rawText || '';
     const qm = rt.match(/选择商品规格[\s\S]{0,300}?≥\s*(\d+)\s*件/) || rt.match(/≥\s*(\d+)\s*件/);
     const specQty = qm ? parseInt(qm[1], 10) : null;
@@ -407,6 +461,7 @@
 
     const product = {
       source: { url: meta.url || null, offerId: (meta.url || '').match(/offer\/(\d+)\.html/)?.[1] || null, parsedAt: new Date().toISOString() },
+      skuInfo: meta.skuInfo || null,          // 页面内嵌的「规格组合 → 价/库存」表（抓取时读出来，解析时折成 skuPrices）
       title: pickTitle(text, html, meta),
       shop: (flat.match(/([\u4e00-\u9fa5]{2,20}(?:有限公司|商行|工厂|商贸|经营部|电子商务))/)?.[1]) || pickAttr(text, '店铺') || null,
       brand: pickAttr(text, '品牌'),
