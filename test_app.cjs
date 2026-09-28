@@ -1,0 +1,253 @@
+/* 规格生成 + 定价引擎回归：口径必须和「跨境定价计算器」算出来的数一致
+ * 运行：node test_app.cjs
+ */
+const fs = require('fs');
+const path = require('path');
+const P = require('./parse-1688.js');
+const V = require('./app.js');
+
+const fx = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1063828892516.md'), 'utf8');
+const prod = P.parse(fx, { url: 'https://detail.1688.com/offer/1063828892516.html' });
+
+let bad = 0;
+const check = (name, cond, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  → ' + extra : ''}`); if (!cond) bad++; };
+const near = (name, got, want, tol = 0.01) => check(name, Math.abs(got - want) < tol, `实际=${Number(got).toFixed(4)} 期望=${want}`);
+
+// 1) 与计算器口径一致性：成本10 / 运费成本10% / 还价20% / 折扣15% / 毛利33% ÷到手价 → 24.144
+const base = V.priceVariant({ pcs: 1, accessory: false }, { unitCost: 10 });
+near('单支：定价 24.144（与计算器一致）', base.price, 24.1440);
+near('单支：到手 16.4179', base.net, 16.4179);
+near('单支：利润 5.4179', base.profit, 5.4179);
+near('单支：运费 = 成本10% = 1元', base.freight, 1.0);
+near('单支：毛利率回代 33%', base.marginOnNet * 100, 33.0, 0.05);
+
+// 2) 多件装线性放大
+const three = V.priceVariant({ pcs: 3, accessory: false }, { unitCost: 10 });
+near('三支：成本 33 元', three.totalCost, 33.0);
+near('三支：定价 72.432', three.price, 72.4320);
+near('三支：毛利率仍 33%', three.marginOnNet * 100, 33.0, 0.05);
+const nine = V.priceVariant({ pcs: 9, accessory: false }, { unitCost: 10 });
+near('九支：定价 = 单支 × 9', nine.price, base.price * 9);
+
+// 3) 配件成本只影响带配件变种
+const withCase = V.priceVariant({ pcs: 1, accessory: true }, { unitCost: 10, accessoryCost: 1.5 });
+near('带盒单支：成本 12.65（含运费）', withCase.totalCost, 12.65);
+near('带盒单支：定价 27.766', withCase.price, 27.7656);
+const noCase = V.priceVariant({ pcs: 1, accessory: false }, { unitCost: 10, accessoryCost: 1.5 });
+near('不带盒的变种不受配件成本影响', noCase.price, 24.1440);
+
+// 4) 欧元换算
+near('欧元价 = 定价 ÷ 7.8', withCase.priceEur, 27.7656 / 7.8, 0.005);
+check('凑整欧元价以 .99 结尾', /\.99$/.test(withCase.priceEur99.toFixed(2)), withCase.priceEur99.toFixed(2));
+
+// 5) 用真实商品数据生成规格
+const rows = V.buildVariants(prod, { unitCost: prod.suggestedUnitCost });
+check('变种数 ≥6', rows.length >= 6, `实际 ${rows.length} 个`);
+check('保留原规格 3 个（粉色/绿色/紫色 单支）',
+  rows.filter(r => r.kind === '原规格').length === 3,
+  rows.filter(r => r.kind === '原规格').map(r => r.nameCn).join('、'));
+check('含混合规格组合装（名字按真实规格值写，不用「混色」模板词）', rows.some(r => r.kind === '组合装'));
+check('含带配件变种', rows.some(r => r.accessory));
+check('SKU 全部唯一', new Set(rows.map(r => r.sku)).size === rows.length);
+check('英文变种名齐全且无中文', rows.every(r => r.nameEn && !/[\u4e00-\u9fa5]/.test(r.nameEn)),
+  rows.map(r => r.nameEn).join(' | '));
+check('每个变种都有定价', rows.every(r => r.pricing.ok && r.pricing.price > 0));
+check('拿货价取自页面规格标价 0.34', rows[0].pricing.goods === 0.34, String(rows[0].pricing.goods));
+
+// 6) 单色商品也要能凑出 ≥6 个变种（兜底）
+const mono = V.buildVariants({ colors: [{ name: '粉色', code: 'C1Y1P' }] }, {});
+check('单色商品仍生成 ≥6 个变种', mono.length >= 6, `实际 ${mono.length} 个`);
+
+// 7) 无解必须被标记而不是给负数/NaN
+const dead = V.priceVariant({ pcs: 1 }, { margin: 80, marginBase: 'list' });
+check('毛利率高于折扣系数时标记无解', dead.ok === false && !!dead.reason, dead.reason);
+
+// 8) 公式文本可核对（含代入数值）
+const lines = V.formulaLines(rows[0], { unitCost: 0.34 });
+check('公式行数 ≥8', lines.length >= 8, `${lines.length} 行`);
+check('公式含 K 展开式', lines[0].includes('(1−20%)×(1−15%)'), lines[0]);
+check('公式含定价代入值', /定价 = 总成本 ÷ .* = /.test(lines[4]), lines[4]);
+console.log('\n--- 公式示例（第一个变种）---');
+lines.forEach(l => console.log('   ' + l));
+
+// 9) 低价兜底：任一规格原定价 < 3 元 → 所有规格统一定价 +3 元（阈值/加价可改，0 = 关闭）
+const cheap = V.buildVariants(prod, { unitCost: 0.34 });
+check('低价兜底：整单判定为已触发', cheap[0].floor.applied === true, JSON.stringify(cheap[0].floor));
+check('低价兜底：低于阈值的规格数 = 实测条数', cheap[0].floor.lowCount === cheap.filter(r => r.pricing.priceSolved < 3).length,
+  `兜底判定 ${cheap[0].floor.lowCount} / 实测低于阈值 ${cheap.filter(r => r.pricing.priceSolved < 3).length} / 共 ${cheap.length}`);
+check('低价兜底：每个规格都 +3（整单统一，不是只加触发那一行）',
+  cheap.every(r => Math.abs(r.pricing.price - (r.pricing.priceSolved + 3)) < 1e-9),
+  cheap.map(r => r.pricing.priceSolved.toFixed(2) + '→' + r.pricing.price.toFixed(2)).join(' '));
+check('低价兜底：高于阈值的规格也照样 +3，且原解保留在 priceSolved',
+  cheap.filter(r => r.pricing.priceSolved >= 3).length > 0 &&
+  cheap.every(r => Number.isFinite(r.pricing.priceSolved) && Math.abs(r.pricing.price - r.pricing.priceSolved - 3) < 1e-9),
+  `高于阈值的 ${cheap.filter(r => r.pricing.priceSolved >= 3).length} 个规格也加了 3`);
+check('低价兜底：到手价按兜底后定价重算',
+  cheap.every(r => Math.abs(r.pricing.net - r.pricing.factor * r.pricing.price) < 1e-9),
+  `首行 net=${cheap[0].pricing.net.toFixed(4)}`);
+check('低价兜底：公式文本里写明这一行', V.formulaLines(cheap[0], { unitCost: 0.34 }).some(l => /低价兜底/.test(l)));
+const pricey = V.buildVariants(prod, { unitCost: 50, costMode: 'param' });   // 这条用例测的是「参数拿货价」驱动的兜底
+check('拿货价够高 → 兜底不触发，定价 = 原解',
+  pricey.every(r => r.floor.applied === false && r.pricing.priceBoost === 0 && Math.abs(r.pricing.price - r.pricing.priceSolved) < 1e-9),
+  `示例原解=${pricey[0].pricing.priceSolved.toFixed(2)}`);
+check('阈值填 0 = 关闭兜底', V.floorDetail([{ pcs: 1 }], { unitCost: 0.34, lowPriceThreshold: 0 }).boost === 0);
+check('加价填 0 = 关闭兜底', V.floorDetail([{ pcs: 1 }], { unitCost: 0.34, lowPriceAdd: 0 }).boost === 0);
+check('原定价高于阈值 → 不触发', V.variantPriceBoost([{ pcs: 1 }], { unitCost: 10, lowPriceThreshold: 24, lowPriceAdd: 3 }) === 0);
+check('原定价低于阈值 → 触发', V.variantPriceBoost([{ pcs: 1 }], { unitCost: 10, lowPriceThreshold: 25, lowPriceAdd: 3 }) === 3);
+check('阈值/加价自定义生效（阈值 5、加价 2）',
+  V.variantPriceBoost([{ pcs: 1 }], { unitCost: 0.34, lowPriceThreshold: 5, lowPriceAdd: 2 }) === 2);
+
+// ── 页面不给颜色编码的商品（真实案例 778887421078：只有「名字→¥价→库存」）──
+const noCode = { source: { offerId: '778887421078' }, colors: [{ name: '肤色', code: null, price: 0.65 }, { name: '黑色', code: null, price: 0.65 }] };
+const nc = V.buildVariants(noCode, { unitCost: 0.65 });
+check('无编码两色：SKU 全部唯一', new Set(nc.map(r => r.sku)).size === nc.length,
+  JSON.stringify(nc.map(r => r.sku)));
+check('无编码两色：原规格 SKU 按页面顺序编 S1/S2（不再全撞成 NA）',
+  nc.slice(0, 2).every((r, i) => r.sku === `YQ-1078-S${i + 1}-1P`), JSON.stringify(nc.slice(0, 2).map(r => r.sku)));
+check('无编码两色：颜色规格列不写假编码', nc.slice(0, 2).every((r, i) => r.colorSpec === ['肤色', '黑色'][i]),
+  JSON.stringify(nc.slice(0, 2).map(r => r.colorSpec)));
+check('无编码两色：名字按真实规格值写（肤色+黑色 九支装）',
+  nc.some(r => r.nameCn === '肤色+黑色 九支装（多件折扣）') && nc.some(r => r.nameCn === '肤色+黑色 三支 + 收纳盒'),
+  JSON.stringify(nc.map(r => r.nameCn)));
+check('无编码两色：不再出现「三色」或「混色」字样', nc.every(r => !/混色/.test(r.nameCn + r.nameEn)),
+  JSON.stringify(nc.filter(r => /三色/.test(r.nameCn + r.nameEn)).map(r => r.nameCn)));
+// 三色有编码的商品：命名与 SKU 保持原样（不能被上面的改动带偏）
+const tri = V.buildVariants(prod, { unitCost: 0.34 });
+check('有编码三色：变种名按真实规格值写（3 款规格混合装 九支装）', tri.some(r => r.nameCn === '3 款规格混合装 九支装（多件折扣）'),
+  JSON.stringify(tri.map(r => r.nameCn).slice(0, 8)));
+check('有编码三色：SKU 仍用页面编码', tri[0].sku === 'YQ-2516-C1Y1P-1P' && tri[2].sku === 'YQ-2516-C1Y1R-1P',
+  JSON.stringify(tri.slice(0, 3).map(r => r.sku)));
+check('有编码三色：SKU 唯一', new Set(tri.map(r => r.sku)).size === tri.length);
+
+// ── 多级规格（父规格 × 子规格）：按组合生成，SKU 唯一，规格列动态 ──
+const twoDim = { source: { offerId: '123456789012' }, specs: [
+  { label: '颜色', values: [{ name: '黑色', code: 'C10Y1', price: 12.8, stock: 8200 }, { name: '白色', code: 'C11Y1', price: 12.8, stock: 7900 }] },
+  { label: '尺码', values: [{ name: 'S', code: 'S1Y1' }, { name: 'M', code: 'S1Y2' }, { name: 'L', code: 'S1Y3' }] }] };
+const td = V.buildVariants(twoDim, { unitCost: 12.8 });
+check('两级规格：维度原样传出（颜色 + 尺码）', td.dims.map(d => d.label).join(',') === '颜色,尺码',
+  JSON.stringify(td.dims.map(d => d.label)));
+check('两级规格：行数 = 9 行计划 × 3 个尺码', td.length === 27, `${td.length} 行`);
+check('两级规格：SKU 唯一', new Set(td.map(r => r.sku)).size === td.length, `${td.length} 行`);
+check('两级规格：SKU 同时带父/子编码（真实规格行排在最前）',
+  td[0].sku === 'YQ-9012-C10Y1-S1Y1-1P' && td[2].sku === 'YQ-9012-C10Y1-S1Y2-1P',
+  td.slice(0, 3).map(r => r.sku).join(' '));
+check('两级规格：每行都有两维的确定值（不空着）',
+  td.every(r => r.spec && r.spec['颜色'] && r.spec['尺码']), JSON.stringify(td[0].spec));
+check('两级规格：英文名带上子规格', td[0].nameEn === 'Black S - 1 Pack' &&
+  (td.find(r => r.sku.endsWith('-2P')) || {}).nameEn === 'Black S - 2 Pack',
+  [td[0].nameEn, (td.find(r => r.sku.endsWith('-2P')) || {}).nameEn].join(' / '));
+check('两级规格：组合太多时封顶并标注',
+  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 12 }).length === 12 &&
+  V.buildVariants(twoDim, { unitCost: 12.8, maxVariants: 12 })[11].truncated.total === 27);
+
+// ── 9 个组合值规格（用户实际那个卷发棒页）：规格格子拆父/子两列，SKU/名字全来自页面数据 ──
+const curlV = V.buildVariants({
+  source: { offerId: '897021596330' },
+  specs: [{ label: '功率', partLabels: ['父规格', '子规格'], values: [
+    { name: '【英文版.欧规】紫色全自动32mm', code: null, price: 25.5, stock: 8678, parts: ['英文版.欧规', '紫色全自动32mm'] },
+    { name: '【英文版.美规】紫色全自动32mm', code: null, price: 25.5, stock: 9568, parts: ['英文版.美规', '紫色全自动32mm'] },
+    { name: '【英文版.英规】紫色全自动32mm', code: null, price: 25.5, stock: 10000, parts: ['英文版.英规', '紫色全自动32mm'] },
+    { name: '【中文版.国标】粉色全自动32mm', code: null, price: 25.5, stock: 9999, parts: ['中文版.国标', '粉色全自动32mm'] },
+    { name: '【英文版.日规】粉色全自动32mm', code: null, price: 25.5, stock: 10000, parts: ['英文版.日规', '粉色全自动32mm'] }
+  ] }]
+}, { unitCost: 25.5 });
+check('卷发棒：5 个规格值都有原规格行', curlV.filter(r => r.kind === '原规格').length === 5,
+  JSON.stringify(curlV.filter(r => r.kind === '原规格').map(r => r.nameCn)));
+check('卷发棒：规格格子拆成 父规格 + 子规格（不写死「颜色规格」）',
+  curlV[0].spec['父规格'] === '英文版.欧规' && curlV[0].spec['子规格'] === '紫色全自动32mm',
+  JSON.stringify(curlV[0].spec));
+check('卷发棒：SKU 用页面顺序 S1..S5 + 包装后缀', curlV[0].sku === 'YQ-6330-S1-1P', JSON.stringify(curlV.slice(0, 3).map(r => r.sku)));
+check('卷发棒：SKU 全部唯一', new Set(curlV.map(r => r.sku)).size === curlV.length,
+  JSON.stringify(curlV.map(r => r.sku)));
+check('卷发棒：中文名 = 页面规格值 + 包装', curlV[0].nameCn === '【英文版.欧规】紫色全自动32mm单支（原规格）', curlV[0].nameCn);
+check('卷发棒：英文名把已知词换成英文（EU/Purple/Automatic）',
+  /EU/.test(curlV[0].nameEn) && /Purple/.test(curlV[0].nameEn) && /Automatic 32mm/.test(curlV[0].nameEn),
+  curlV[0].nameEn);
+check('卷发棒：无中文残留（词表已覆盖这些词）', curlV.every(r => !r.enPending), JSON.stringify(curlV.filter(r => r.enPending).map(r => r.nameEn)));
+check('卷发棒：混合行不写「混色」', curlV.every(r => !/混色/.test(r.nameCn)), JSON.stringify(curlV.map(r => r.nameCn).filter(n => /混色/.test(n))));
+
+// ── 双规格（颜色 11 × 尺码 2）：真实规格组合先排满，封顶时先丢包装行 ──
+const slProd = { source: { offerId: '841299382846' }, specs: [
+  { label: '颜色', values: Array.from({ length: 11 }, (_, i) => ({ name: '色' + (i + 1), code: null, price: null, stock: null })) },
+  { label: '尺码', values: [
+    { name: '36-37适合35-36码', code: null, price: 11.5, stock: 3 },
+    { name: '40-41适合39-40码', code: null, price: 11.5, stock: 59 }
+  ] }
+] };
+const sv = V.buildVariants(slProd, { unitCost: 11.5 });
+check('双规格：11 × 2 = 22 个真实规格组合全在', sv.filter(r => r.kind === '原规格').length === 22,
+  `${sv.filter(r => r.kind === '原规格').length} 行 / 共 ${sv.length} 行`);
+check('双规格：格子同时有 颜色 和 尺码 两个维度',
+  sv[0].spec['颜色'] === '色1' && sv[0].spec['尺码'] === '36-37适合35-36码', JSON.stringify(sv[0].spec));
+check('双规格：SKU 带父+子编码', sv[0].sku === 'YQ-2846-S1-V11-1P', JSON.stringify(sv.slice(0, 3).map(r => r.sku)));
+check('双规格：SKU 全部唯一', new Set(sv.map(r => r.sku)).size === sv.length);
+check('双规格：封顶 24 行时，真实规格组合一个都没丢',
+  V.buildVariants(slProd, { unitCost: 11.5, maxVariants: 24 }).filter(r => r.kind === '原规格').length === 22);
+check('规格列上限=1 → 只按颜色排（11 个父规格 + 封顶）',
+  V.buildVariants(slProd, { unitCost: 11.5, maxDims: 1 }).filter(r => r.kind === '原规格').length === 11);
+check('规格列上限相关的元信息（allDims / dimsShown）',
+  V.buildVariants(slProd, { unitCost: 11.5, maxDims: 1 }).allDims.length === 2 &&
+  V.buildVariants(slProd, { unitCost: 11.5, maxDims: 1 }).dimsShown === 1);
+
+// ── 打包阶梯价（单片 2.12 / 5片装 11.5 / 10片装 23）：成本价按各自规格的标价，不混用一个平均价 ──
+const ladder = { source: { offerId: '922794624735' }, specs: [{ label: '颜色', values: [
+  { name: '灰色30cm*30cm', code: null, price: 2.12, stock: 1 },
+  { name: '咖啡色30cm*30cm', code: null, price: 2.21, stock: 1 },
+  { name: '灰色*5片装', code: null, price: 11.5, stock: 1 },
+  { name: '灰色*10片装', code: null, price: 23, stock: 1 }] }] };
+const lv = V.buildVariants(ladder, { unitCost: 5, maxVariants: 40 });
+const costOf = (pred) => ((lv.find(pred) || {}).pricing || {}).baseCost;
+const t = (x, want) => Math.abs(x - want) < 1e-9;
+check('阶梯价：单片行用自己规格的标价 2.12（不是参数里的 5）',
+  t(costOf(r => r.idx === 1), 2.12), costOf(r => r.idx === 1));
+check('阶梯价：5片装行用 11.5',
+  t(costOf(r => r.kind === '原规格' && /5片装/.test(r.nameCn)), 11.5), costOf(r => r.kind === '原规格' && /5片装/.test(r.nameCn)));
+check('阶梯价：10片装行用 23',
+  t(costOf(r => r.kind === '原规格' && /10片装/.test(r.nameCn)), 23), costOf(r => r.kind === '原规格' && /10片装/.test(r.nameCn)));
+check('阶梯价：两种规格各一支 → 成本 = 两个价相加 4.33',
+  t(costOf(r => /混合双支装/.test(r.nameCn)), 4.33), costOf(r => /混合双支装/.test(r.nameCn)));
+check('阶梯价：六支装件数说不清 → 回落到参数拿货价 5×6=30',
+  t(costOf(r => /六支装/.test(r.nameCn)), 30), costOf(r => /六支装/.test(r.nameCn)));
+const lp = V.buildVariants(ladder, { unitCost: 5, maxVariants: 40, costMode: 'param' });
+check('切成「统一拿货价」时 5片装行也用参数值 5',
+  Math.abs((((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost) - 5) < 1e-9,
+  ((lp.find(r => r.kind === '原规格' && /5片装/.test(r.nameCn)) || {}).pricing || {}).baseCost);
+
+// 真实规格行不被「混合装规格值上限」砍掉：15 个规格值就必须有 15 行原规格
+const many = { source: { offerId: '9999' }, specs: [{ label: '颜色',
+  values: Array.from({ length: 15 }, (_, i) => ({ name: '色' + (i + 1), code: null, price: 2 + i, stock: 1 })) }] };
+const mv = V.buildVariants(many, { unitCost: 2, maxVariants: 60 });
+check('15 个规格值 → 15 行「原规格」（上限只约束混合装/囤货装行）',
+  mv.filter(r => r.kind === '原规格').length === 15, `${mv.filter(r => r.kind === '原规格').length} 行`);
+
+/* AI（DeepSeek）排的变种计划：组合/件数/英文名听它的，价格与成本仍由引擎算 */
+const aiProd = { source: { offerId: '2846' }, specs: [{ label: '颜色', values: [
+  { name: '白色【3411牛角】', code: null, price: 11.5, stock: 3 },
+  { name: '粉红【3411牛角】', code: null, price: 11.5, stock: 3 },
+  { name: '【清仓随机款，尺码可指定】', code: null, price: 11.5, stock: 1 }] }] };
+const aiPlan = { ok: true, model: 'deepseek-flash', rows: [
+  { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameEn: 'White 3411 Horn' },
+  { kind: '原规格', values: ['粉红【3411牛角】'], pcs: 1, accessory: false, nameEn: 'Pink 3411 Horn' },
+  { kind: '组合装', values: ['白色【3411牛角】', '粉红【3411牛角】'], pcs: 2, accessory: false, nameEn: 'White + Pink - 2 Pack' },
+  { kind: '带配件', values: ['白色【3411牛角】'], pcs: 1, accessory: true, nameEn: 'White 3411 Horn with Case' }
+] };
+const air = V.buildVariants(aiProd, { unitCost: 11.5, costMode: 'spec', aiPlan });
+check('AI 计划 → 行数按计划来（4 行）', air.length === 4, air.length + ' 行');
+check('AI 给的英文名直接用（不再走词表、不标黄）',
+  air.every(r => !r.enPending) && /White 3411 Horn/.test(air[0].nameEn), air.map(r => r.nameEn).join(' | '));
+check('AI 排的组合装件数=2 被保留', air.some(r => r.pcs === 2 && /2 Pack/.test(r.nameEn)));
+check('成本仍由引擎按各行自己标价算（11.5）', air.every(r => Math.abs(r.unitCost - 11.5) < 1e-9), air.map(r => r.unitCost).join(','));
+const pricedAi = air.map(r => V.priceVariant(r, { unitCost: 11.5 }));
+check('定价仍由引擎算：2 件装定价 = 单支 × 2（AI 插不进去）',
+  Math.abs(pricedAi[2].price - pricedAi[0].price * 2) < 0.01,
+  `${pricedAi[2].price.toFixed(3)} vs ${(pricedAi[0].price * 2).toFixed(3)}`);
+check('SKU 仍按引擎规则生成且唯一', new Set(air.map(r => r.sku)).size === air.length, air.map(r => r.sku).join(','));
+const guard = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: { rows: [
+  { kind: '原规格', values: ['页面上没有的颜色'], pcs: 1, nameEn: 'Ghost' },
+  { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, nameEn: 'White' }] } });
+check('AI 行里的值在表里找不到 → 该行被丢掉（第二道保险）',
+  guard.length === 1 && guard[0].nameEn === 'White', guard.map(r => r.nameEn).join(','));
+check('不传 AI 计划时仍是原来的引擎规则（对照）', V.buildVariants(aiProd, { unitCost: 11.5 }).length > 4);
+
+console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
+process.exit(bad ? 1 : 0);

@@ -1,0 +1,28 @@
+# ============ 绝对不许入库（隐私 / 密钥 / 运行期产物）============
+# DeepSeek 密钥（含 apiKey）
+.ai.json
+# 1688 登录态（cookie 侧车 + 完整浏览器 profile）
+.chrome-cookies.json
+.chrome-profile/
+# 浏览器/抓取状态
+.tool-browser.json
+.use-my-chrome.json
+.laststatus.json
+.last-page.txt
+.last-page.png
+.last-page.html
+.live-*.png
+.r.json
+.probe.cjs
+# 运行日志
+logs/
+
+# ============ 通用 ============
+node_modules/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+enctest/
+.DS_Store
+Thumbs.db

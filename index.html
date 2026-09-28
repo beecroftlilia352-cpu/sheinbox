@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>SHEIN 选品定价台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--line:#e3e6ea;--fg:#1c1f23;--mut:#6b7280;--acc:#2563eb;--ok:#059669;--warn:#d97706;--err:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Microsoft YaHei",system-ui,-apple-system,sans-serif}
+  .wrap{max-width:1320px;margin:0 auto;padding:18px 16px 60px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .sub{color:var(--mut);font-size:12.5px;margin-bottom:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input[type=text],input[type=number],select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--fg)}
+  input[type=number]{width:92px;text-align:right}
+  input[type=text].wide{flex:1;min-width:320px}
+  textarea{width:100%;min-height:110px;font-family:Consolas,monospace;font-size:12px}
+  button{font:inherit;padding:8px 14px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:7px;cursor:pointer}
+  button.ghost{background:#fff;color:var(--acc)}
+  button.mini{padding:2px 8px;font-size:12px}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .status{margin-top:10px;padding:9px 12px;border-radius:8px;font-size:13px;display:none}
+  .status.show{display:block}
+  .status.opening,.status.waiting{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  .status.captcha{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-weight:600}
+  .status.ready{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+  .status.error,.status.timeout{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+  .chip{background:#f1f5f9;border:1px solid var(--line);border-radius:20px;padding:2px 10px;font-size:12.5px;color:#334155}
+  .chip b{color:#0f172a}
+  .chip.warn{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .fld{display:flex;flex-direction:column;gap:3px}
+  .fld label{font-size:12px;color:var(--mut)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 6px;text-align:right;white-space:nowrap}
+  th:first-child,td:first-child,th.l,td.l{text-align:left}
+  thead th{position:sticky;top:0;background:#f8fafc;z-index:1;font-weight:600;color:#334155}
+  tbody tr:hover{background:#f8fbff}
+  tbody tr.sel{background:#eff6ff}
+  td .pn{color:var(--mut)}
+  td.enpending{background:#fffbeb;color:#92400e}
+  td.enpending::after{content:' ⚑';color:#b45309}
+  .price{font-weight:700;color:#0f172a}
+  .eur{color:var(--ok);font-weight:600}
+  .mono{font-family:Consolas,monospace}
+  pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto;font-size:12.5px;line-height:1.7}
+  .hint{font-size:12px;color:var(--mut)}
+  details summary{cursor:pointer;color:var(--acc);font-size:13px;margin:8px 0}
+  .kbd{background:#f1f5f9;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-family:Consolas,monospace;font-size:12px}
+  .banner{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:9px 12px;border-radius:8px;font-size:13px;margin-bottom:12px;display:none}
+  .banner.show{display:block}
+  img.thumb{width:44px;height:44px;object-fit:cover;border:1px solid var(--line);border-radius:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SHEIN 选品定价台</h1>
+  <div class="sub">输入 1688 商品链接 → 自动出「规格变种 + 定价 + 计算公式」。全部计算在本机浏览器完成，不上传任何数据。</div>
+  <div id="fileBanner" class="banner">当前是直接打开文件（file://）——「自动读取」需要本地服务：双击 <span class="kbd">serve.cmd</span>，然后访问 http://127.0.0.1:8901/ 。手动粘贴导入不受影响。</div>
+
+  <!-- 导入 -->
+  <div class="card">
+    <h2>① 商品链接</h2>
+    <div class="row">
+      <input type="text" id="url" class="wide" placeholder="https://detail.1688.com/offer/1063828892516.html">
+      <button id="btnFetch">读取商品</button>
+      <span class="hint">每次点都重新读一遍页面（不复用缓存，价格不会给你旧数）</span>
+      <button id="btnDemo" class="ghost">载入示例（离线）</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div class="hint" style="margin-top:6px">
+      抓取用的浏览器有两种模式，自动挑：<b>① 你自己的 Chrome</b>（推荐，只在你的浏览器里新开标签页、用你的登录态；
+      先双击一次 <code>use-my-chrome.cmd</code> 让它带调试端口重开，之后就一直用它）
+      → <b>② 工具自己的常驻浏览器</b>（独立窗口，抓取结束/停服务都不会关它）。
+    </div>
+
+    <details>
+      <summary>抓不到？手动导入（把商品页文本/源码粘进来，或拖入 .html/.md/.txt 文件）</summary>
+      <div class="row" style="margin-bottom:8px">
+        <input type="file" id="fileIn" accept=".html,.htm,.md,.txt">
+        <span class="hint">浏览器里打开商品页 → <span class="kbd">Ctrl+U</span> 看源码（或 Ctrl+A / Ctrl+C 复制全文）→ 粘到下面</span>
+      </div>
+      <textarea id="paste" placeholder="粘贴商品页的源码或整页文本…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="btnParse" class="ghost">解析这段文本</button>
+        <span class="hint">解析规则只认页面里真实存在的字段，缺什么就在下面手工补，绝不编造。</span>
+      </div>
+    </details>
+  </div>
+
+  <!-- 商品信息 -->
+  <div class="card">
+    <h2>② 商品信息 <span class="hint" id="prodHint"></span></h2>
+    <div id="prodTitle" class="hint">还没有商品数据。</div>
+    <div class="chips" id="prodChips"></div>
+    <div id="specInputs" class="grid" style="margin-top:8px"></div>
+    <div class="grid" style="margin-top:8px">
+      <div class="fld"><label>单件重量 g</label><input type="number" id="weight" step="1"></div>
+      <div class="fld"><label>箱装数量</label><input type="number" id="boxqty" step="1"></div>
+    </div>
+    <div id="pricePicker" style="margin-top:10px"></div>
+  </div>
+
+  <!-- 参数 -->
+  <div class="card">
+    <h2>③ 定价参数（改任意一个，下面表和公式立刻重算）</h2>
+    <div class="grid">
+      <div class="fld"><label>拿货价（元/件，抓取后自动填规格标价）</label><input type="number" id="unitCost" value="" placeholder="读取商品后自动填，也可手填" step="0.01"></div>
+      <div class="fld"><label>配件成本（元/单，如收纳盒）</label><input type="number" id="accessoryCost" value="1.5" step="0.1"></div>
+      <div class="fld"><label>运费率（成本的 %）</label><input type="number" id="freightRate" value="10" step="1"></div>
+      <div class="fld"><label>前端还价 %</label><input type="number" id="bargain" value="20" step="1"></div>
+      <div class="fld"><label>活动折扣 %</label><input type="number" id="discount" value="15" step="1"></div>
+      <div class="fld"><label>叠加方式</label><select id="stackMode">
+        <option value="mul" selected>乘性 (1−a)×(1−b)</option><option value="add">相加 1−a−b</option></select></div>
+      <div class="fld"><label>目标毛利率 %</label><input type="number" id="margin" value="33" step="1"></div>
+      <div class="fld"><label>利润口径</label><select id="marginBase">
+        <option value="net" selected>利润 ÷ 到手价</option>
+        <option value="list">利润 ÷ 标价</option>
+        <option value="cost">利润 = 成本 × 倍数</option></select></div>
+      <div class="fld"><label>汇率（元 → 欧元）</label><input type="number" id="fxRate" value="7.8" step="0.01"></div>
+      <div class="fld"><label>低价兜底阈值（元，低于它触发）</label><input type="number" id="floorThreshold" value="3" step="0.5"></div>
+      <div class="fld"><label>低价兜底加价（元，所有规格统一加）</label><input type="number" id="floorAdd" value="3" step="0.5"></div>
+      <div class="fld"><label>规格列上限（表格最多显示几级规格，默认 3）</label><input type="number" id="maxDims" value="3" min="1" max="3" step="1"></div>
+      <div class="fld"><label>成本价怎么取</label><select id="costMode">
+        <option value="spec" selected>按各规格自己的标价（推荐）</option>
+        <option value="param">全部用上面那个拿货价</option></select></div>
+      <div class="fld"><label>变种计划怎么排</label><select id="planMode">
+        <option value="engine" selected>引擎规则（每个规格一支 + 固定组合）</option>
+        <option value="ai">DeepSeek 思考（挑组合 / 件数 / 英文名）</option></select></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnAi" class="ghost">让 DeepSeek 排一版变种</button>
+      <span class="hint">DeepSeek 只排「哪些规格组合上架 + 件数 + 英文变种名」；价格、成本、利润仍由这里的引擎算。它要是编了页面上没有的规格值，整份计划会被打回、自动回落到引擎规则。</span>
+    </div>
+    <div id="aiBox" class="hint" style="margin-top:6px"></div>
+    <div class="hint" id="paramEcho" style="margin-top:8px"></div>
+  </div>
+
+  <!-- 规格 + 定价 -->
+  <div class="card">
+    <h2>④ 变种规格与定价 <span class="hint" id="rowHint"></span></h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="btnRegen" class="ghost">重新生成规格</button>
+      <button id="btnCsv" class="ghost">导出上架表 CSV</button>
+      <button id="btnFormulas" class="ghost">导出全部公式 TXT</button>
+      <span class="hint">件数与配件可直接在表里改，只影响那一行。</span>
+    </div>
+    <div id="emptyBox" class="hint" style="padding:8px 2px;line-height:1.8">
+      <b>还没有商品</b> —— 这里不预生成任何规格，也不拿默认参数凭空算。<br>
+      把 1688 商品链接粘到 ① 点「<b>读取商品</b>」（或点「载入示例」离线试跑一遍），
+      变种规格与定价会<b>完全按抓到的真实数据</b>生成。
+    </div>
+    <div style="overflow:auto;max-height:560px">
+      <table id="tbl">
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 公式 -->
+  <div class="card">
+    <h2>⑤ 计算公式（选中的那一行，数值已代入）</h2>
+    <pre id="formula">—</pre>
+    <div class="hint">口径：到手价 = 标价 × K，K = (1−还价%)×(1−折扣%)（可切相加）；利润 = 到手价 − 拿货成本 − 运费；运费 = 拿货成本 × 运费率；利润率默认 = 利润 ÷ 到手价。低价兜底：只要有规格定价低于阈值（默认 ¥3），所有规格定价统一加（默认 ¥3），到手价/利润/欧元价都按加价后的定价重算。</div>
+  </div>
+</div>
+
+<script src="parse-1688.js"></script>
+<script src="app.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const P = window.Parse1688, V = window.VariantEngine;
+let PRODUCT = null, ROWS = [], OV = {}, SEL = 0, TIMER = null;
+let NO_COLORS = false;          // 解析到的颜色为空 → 现在用的是单色兜底方案（regen 会把空颜色替换成“单色”，所以这里单独记
+let EMPTY_REASON = '';          // 列表为空时的原因（没商品 / 没价格），显示在 ④ 的提示和导出报错里
+let AI_PLAN = null;             // DeepSeek 排的变种计划（null = 走引擎规则）；只装组合/件数/英文名，不含价格
+let AI_NOTE = '';               // ④ 标题旁的「变种计划来自哪」提示
+
+if (location.protocol === 'file:') $('fileBanner').classList.add('show');
+
+function setStatus(state, hint, extra) {
+  const el = $('status');
+  el.className = 'status show ' + state;
+  const icon = {opening:'⏳', waiting:'⏳', captcha:'🖐', ready:'✅', error:'✖', timeout:'⚠'}[state] || '·';
+  el.innerHTML = icon + ' ' + (hint || '') + (extra ? '<div class="hint" style="margin-top:4px">' + extra + '</div>' : '');
+}
+function hideStatus(){ $('status').className = 'status'; }
+
+function params() {
+  return {
+    unitCost: parseFloat($('unitCost').value) || 0,
+    accessoryCost: parseFloat($('accessoryCost').value) || 0,
+    freightRate: parseFloat($('freightRate').value) || 0,
+    bargain: parseFloat($('bargain').value) || 0,
+    discount: parseFloat($('discount').value) || 0,
+    stackMode: $('stackMode').value,
+    margin: parseFloat($('margin').value) || 0,
+    marginBase: $('marginBase').value,
+    fxRate: parseFloat($('fxRate').value) || 1,
+    lowPriceThreshold: parseFloat($('floorThreshold').value) || 0,
+    lowPriceAdd: parseFloat($('floorAdd').value) || 0,
+    maxDims: parseInt($('maxDims').value, 10) || 3,
+    costMode: $('costMode') ? $('costMode').value : 'spec'
+  };
+}
+const f2 = x => Number.isFinite(x) ? x.toFixed(2) : '—';
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------- 规格维度（父规格 / 子规格，标签来自页面数据，不写死「颜色」） ---------- */
+function dimsOf(prod) {
+  return (((prod && prod.specs) || []).filter(d => d && d.values && d.values.length));
+}
+/* 表格里最多显示几级规格（默认 3，参数可调）：列太多会挤不下，用户要求「默认最大三个」 */
+function maxDimsNow() {
+  const el = $('maxDims');
+  const v = el ? parseInt(el.value, 10) : 3;
+  return Math.max(1, Math.min(3, v || 3));
+}
+function shownDimsOf(prod) { return dimsOf(prod).slice(0, maxDimsNow()); }
+/* 把输入框里的一行规格值按逗号/分号拆开；【】里的逗号属于值本身，不拆 */
+function splitValueList(s) {
+  const out = [];
+  let cur = '', depth = 0;
+  for (const ch of String(s || '')) {
+    if (ch === '【') depth++;
+    else if (ch === '】') depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === ',' || ch === '，' || ch === ';' || ch === '；')) { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+function renderSpecInputs(prod) {
+  const box = $('specInputs');
+  const all = dimsOf(prod);
+  const dims = shownDimsOf(prod);
+  if (!dims.length) {
+    box.innerHTML = '<div class="hint" style="grid-column:1/-1">规格字段：读取商品后按页面真实规格自动生成（父规格、子规格各占一行，也可手工补）。</div>';
+    return;
+  }
+  box.innerHTML = dims.map((d, i) =>
+    '<div class="fld" style="grid-column:1/-1"><label>' + esc(d.label) + '（' + d.values.length + ' 个值' +
+    (d.partLabels ? '，组合值 → 表格里拆成「' + d.partLabels.join(' / ') + '」两列' : '') + '，名称:编码，逗号分隔）</label>' +
+    '<input type="text" id="spec' + i + '" data-label="' + esc(d.label) + '"' +
+    (d.partLabels ? ' data-parts="' + esc(d.partLabels.join('/')) + '"' : '') + ' value="' +
+    esc(d.values.map(v => v.name + (v.code ? ':' + v.code : '')).join(', ')) + '"></div>').join('') +
+    (all.length > dims.length
+      ? '<div class="hint" style="grid-column:1/-1">页面上共有 ' + all.length + ' 级规格（' +
+        all.map(d => esc(d.label)).join(' / ') + '），按「规格列上限」只显示前 ' + dims.length + ' 级；要都显示就把上限调大。</div>'
+      : '');
+  box.querySelectorAll('input[id^=spec]').forEach(inp => {
+    inp.onchange = () => { PRODUCT.specs = parseSpecField(); OV = {}; regen(true); };
+  });
+}
+/* 把输入框里的规格读回维度数组；同名值沿用原来解析到的价格/库存（规格标价不能丢） */
+function parseSpecField() {
+  const out = [];
+  const old = shownDimsOf(PRODUCT);
+  $('specInputs').querySelectorAll('input[id^=spec]').forEach((inp, i) => {
+    const label = inp.dataset.label || (old[i] && old[i].label) || ('规格' + (i + 1));
+    const prev = (old[i] && old[i].values) || [];
+    // 分隔符：逗号/分号（中英文都行）——但【】里面的逗号是值的一部分（「【清仓随机款，尺码可指定】」），不能拆
+    const values = splitValueList(inp.value).map(s => {
+      const nm = (s.split(/[:：]/)[0] || '').trim();
+      if (!nm) return null;
+      const code = (s.split(/[:：]/)[1] || '').trim();
+      const keep = prev.find(v => v.name === nm) || {};
+      // 组合值（【父】子）拆开放进两列；手工改后的值也按同一规则重拆，拆不开就不拆
+      const parts = keep.parts || (P.splitParts ? P.splitParts(nm) : null);
+      return { name: nm, code: code || keep.code || null, price: keep.price != null ? keep.price : null, stock: keep.stock != null ? keep.stock : null, parts: parts || null };
+    }).filter(Boolean);
+    const partLabels = (inp.dataset.parts ? inp.dataset.parts.split('/') : null);
+    // 空行也要占位（null），这样「显示中的第 2 级」不会错位到第 1 级去
+    if (!values.length) { out.push(null); return; }
+    out.push(partLabels && values.every(v => v.parts) ? { label, values, partLabels } : { label, values });
+  });
+  return out;
+}
+
+/* ---------- 商品数据进入 ---------- */
+function onProduct(prod, note) {
+  try {
+    onProductInner(prod, note);
+  } catch (e) {
+    // 关键：脚本出错不能让页面「显示成功但什么都不动」。多半是浏览器缓存了旧版脚本。
+    setStatus('error', '页面脚本出错：' + e.message + ' —— 多半是浏览器用了缓存的旧脚本，按 Ctrl+F5 强制刷新后再读。');
+    console.error('onProduct 失败', e);
+  }
+}
+
+function onProductInner(prod, note) {
+  PRODUCT = prod;
+  // 兼容老缓存/老格式：只有 colors、没有 specs 维度的商品 → 就地补成「父规格」维度，
+  // 否则新逻辑会把 colors 当空、退化成单色兜底（用户看到的就是「同一个链接结果变差了」）
+  if ((!prod.specs || !prod.specs.length) && (prod.colors || []).length) {
+    prod.specs = [{ label: prod.specLabel || '规格', values: prod.colors }];
+  }
+  NO_COLORS = !dimsOf(prod).length;
+  renderSpecInputs(prod);
+  $('prodHint').textContent = note || '';
+  const t = prod.title || '（标题没解析到，请手工确认）';
+  $('prodTitle').innerHTML = '<b>' + t + '</b>' +
+    (prod.source && prod.source.offerId ? ' <span class="mono hint">offer ' + prod.source.offerId + '</span>' : '');
+  const chips = [];
+  const chip = (k, v, cls) => { if (v !== null && v !== undefined && v !== '') chips.push('<span class="chip ' + (cls||'') + '"><b>' + k + '</b> ' + v + '</span>'); };
+  chip('店铺', prod.shop); chip('品牌', prod.brand); chip('类别', prod.category);
+  chip('单件重量', prod.weight_g ? prod.weight_g + ' g' : null);
+  chip('箱装', prod.box_qty ? prod.box_qty + ' 个' : null);
+  chip('跨境专供', prod.crossBorderOnly === true ? '是' : prod.crossBorderOnly === false ? '否（比价风险高）' : null,
+       prod.crossBorderOnly === false ? 'warn' : '');
+  chip('专利', prod.hasPatent === true ? '有' : prod.hasPatent === false ? '无' : null);
+  chip('运费', prod.freightNote);
+  chip('拿货价来源', prod.suggestedUnitCostSource);
+  const MISS_CN = { title: '标题', price: '价格', colors: '颜色/规格', weight: '重量', boxQty: '箱装数量' };
+  if ((prod.missing || []).length) chip('未解析到', prod.missing.map(m => MISS_CN[m] || m).join('、'), 'warn');
+  if (!dimsOf(prod).length) chip('规格', '没读到规格值 → 现在是单色兜底方案（该商品规格可能要登录才可见）', 'warn');
+  $('prodChips').innerHTML = chips.join('');
+
+  // 关键：规格/重量/箱装必须每次都用新商品覆盖（解析不到就清空）。
+  // 之前只在「解析到颜色」时才写，导致抓下一个没有规格的商品时，
+  // 变种名/SKU 继续沿用上一个商品的规格 —— 看着就是「只有价格变了，变种名没联动」。
+  $('weight').value = prod.weight_g || '';        // 新商品没有就清空，不留上一个商品的值
+  $('boxqty').value = prod.box_qty || '';
+
+  // 拿货价：给出页面上的候选档位，点一下即用
+  const cands = (prod.priceCandidates || prod.priceTiers || []);
+  if (cands.length) {
+    $('pricePicker').innerHTML = '<span class="hint">价格档位（默认＝各规格自己的标价；点某个档位＝所有行统一用这个价）：</span> ' +
+      cands.map(c => '<button class="ghost mini" data-price="' + c.price + '">' +
+        c.type + ' ¥' + c.price + (c.minQty ? '（≥' + c.minQty + '件）' : '') + '</button>').join(' ');
+    document.querySelectorAll('#pricePicker button').forEach(b => b.onclick = () => {
+      $('unitCost').value = b.dataset.price;
+      if ($('costMode')) $('costMode').value = 'param';   // 点了档位 = 明确要用这个价 → 切成统一拿货价
+      regen(false);
+    });
+  } else {
+    $('pricePicker').innerHTML = '<span class="hint" style="color:#dc2626">页面价格没解析到，请在下面手工填拿货价。</span>';
+  }
+  if (prod.suggestedUnitCost) $('unitCost').value = prod.suggestedUnitCost;
+  if ($('costMode')) $('costMode').value = 'spec';   // 新商品 → 成本价回到默认「按各规格自己的标价」
+  OV = {};                                  // 新商品 → 清掉旧的行内改动
+  AI_PLAN = null; AI_NOTE = '';             // 新商品 → 上一份 DeepSeek 计划作废
+  regen(false);
+  if ($('planMode') && $('planMode').value === 'ai') aiPlanNow();   // 选了 DeepSeek 档 → 读完商品就自动排一版
+}
+
+/* 输入框里的规格 → 已由 parseSpecField() 处理（支持父/子多级规格，不再写死「颜色」） */
+
+/* ---------- 规格与定价 ---------- */
+function regen(resetSel) {
+  try {
+    regenInner(resetSel);
+  } catch (e) {
+    setStatus('error', '重算失败：' + e.message + ' —— 如果是"V.xxx is not a function"，请按 Ctrl+F5 强制刷新（浏览器缓存了旧脚本）。');
+    console.error('regen 失败', e);
+  }
+}
+
+function regenInner(resetSel) {
+  // ★ 列表只由抓到的商品数据生成：没商品（或商品没解析到价格）就一行都不生成，
+  //   绝不用参数区的默认值凭空造一张表（用户明确要求：清空默认值，只能按链接抓取动态生成）
+  EMPTY_REASON = !PRODUCT ? '还没有商品：在 ① 粘贴 1688 链接点「读取商品」'
+    : (!(parseFloat($('unitCost').value) > 0) ? '这个商品没解析到价格：点 ③ 里的价格档位，或手工填「拿货价」' : '');
+  if (EMPTY_REASON) { ROWS = []; SEL = 0; renderRows(); return; }
+  const prod = PRODUCT;
+  const field = parseSpecField();                      // 与「显示中的维度」对齐，空掉的级别是 null
+  if (field.length && field.some(Boolean)) {
+    // 输入框只对应「显示中的前 N 级」，被上限藏起来的维度要原样保留，否则调小上限再调大就丢了
+    const full = dimsOf(prod);
+    prod.specs = full.map((d, i) => field[i] || d);
+    if (!prod.specs.length) prod.specs = field.filter(Boolean);
+    prod.colors = ((field[0] || {}).values) || [];
+  } else { prod.specs = []; prod.colors = []; }          // 全清空 → 明确走单色兜底
+  const pp = params();
+  pp.aiPlan = AI_PLAN;                                   // DeepSeek 排的变种计划（null → 走引擎规则）
+  if (AI_PLAN && Array.isArray(AI_PLAN.rows)) {          // 规格被改过 → AI 计划可能对不上，明确提示
+    const cur = new Set(((prod.specs || [])).flatMap(d => (d.values || []).map(v => v.name)));
+    const miss = AI_PLAN.rows.flatMap(r => (r.values || [])).filter(v => !cur.has(v));
+    const base = ' ｜ 变种计划：DeepSeek 排的 ' + AI_PLAN.rows.length + ' 行' +
+      (AI_PLAN.model ? '（' + AI_PLAN.model + '）' : '');
+    AI_NOTE = miss.length ? base + '，但规格被改过，' + miss.length + ' 个值已不在表里 → 建议重新排一版' : base;
+  }
+  const rows = V.buildVariants(prod, pp).map(r => {
+    const ov = OV[r.sku];
+    return ov ? Object.assign({}, r, ov) : r;      // 行内改动（件数/配件）先合并进来
+  });
+  // 行内改动会改变成本 → 低价兜底要按改后的成本重算（阈值/加价都来自参数区）
+  const boost = V.variantPriceBoost(rows, pp);
+  ROWS = rows.map(r => Object.assign({}, r, { pricing: V.priceVariant(r, pp, boost) }));
+  if (resetSel) SEL = 0;
+  if (SEL >= ROWS.length) SEL = 0;
+  renderRows();
+}
+
+/* ---------- DeepSeek 排变种（它只排组合/件数/英文名，价格与成本仍由引擎算） ---------- */
+function aiBoxHtml(j) {
+  const parts = [];
+  (j.notes || []).forEach(n => parts.push('· ' + esc(n)));
+  (j.skipped || []).forEach(s => parts.push('· 没上架：<b>' + esc(s.value) + '</b>（' + esc(s.reason) + '）'));
+  if (!(j.skipped || []).length) parts.push('· 所有规格值都排进去了，没有跳过的');
+  if (j.truncated) parts.push('· 行数超上限：只保留前 ' + j.truncated.kept + ' 行（本来 ' + j.truncated.total + ' 行）');
+  return parts.join('<br>');
+}
+async function aiPlanNow() {
+  if (!PRODUCT) { setStatus('error', '还没有商品：先「读取商品」，再让 DeepSeek 排变种。'); return; }
+  const btn = $('btnAi');
+  const p = params();
+  btn.disabled = true;
+  AI_NOTE = ' ｜ 变种计划：DeepSeek 正在思考…';
+  $('aiBox').innerHTML = '⏳ 正在把规格数据发给 DeepSeek 排变种（一般 5~25 秒）…';
+  regen(false);                 // 先把「正在思考」显示出来
+  try {
+    const r = await fetch('/api/ai-plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product: PRODUCT, params: { maxDims: maxDimsNow(), maxRows: p.maxVariants } })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) {
+      AI_PLAN = null; OV = {};
+      AI_NOTE = ' ｜ 变种计划：DeepSeek 没成，已按引擎规则排';
+      $('aiBox').innerHTML = '<span style="color:#dc2626">✖ ' + esc(j.error || 'DeepSeek 没给出计划（原因不明）') + '</span><br>· 已自动回落到引擎规则，表格照常可用。';
+      regen(true);
+      setStatus('error', 'DeepSeek 没能给出变种计划，已回落到引擎规则：' + (j.error || ''));
+      return;
+    }
+    AI_PLAN = j; OV = {};
+    AI_NOTE = ' ｜ 变种计划：DeepSeek 排的 ' + (j.rows || []).length + ' 行（' + (j.model || 'deepseek') + '，' + (j.elapsedSec || 0) + 's）';
+    $('aiBox').innerHTML = aiBoxHtml(j);
+    regen(true);
+    setStatus('ready', 'DeepSeek 排好了：' + (j.rows || []).length + ' 行变种（价格与成本仍是本地引擎算的）。');
+  } catch (e) {
+    AI_PLAN = null; OV = {};
+    AI_NOTE = ' ｜ 变种计划：DeepSeek 调用失败，已按引擎规则排';
+    $('aiBox').innerHTML = '<span style="color:#dc2626">✖ 调用失败：' + esc(e.message) + '</span>';
+    regen(true);
+  } finally { btn.disabled = false; }
+}
+
+/* 列清单：整维是组合值（【父】子）→ 展开成「父规格 / 子规格」两列；否则一维一列。
+ * 列名一律来自页面数据，不写死「颜色规格」。 */
+function colList(dims) {
+  const out = [];
+  (dims && dims.length ? dims : [{ label: '规格' }]).forEach(d => {
+    if (d.partLabels && d.partLabels.length) d.partLabels.forEach(l => out.push(l));
+    else out.push(d.label);
+  });
+  return out;
+}
+/* 表头按规格维度动态生成（父规格/子规格各一列，标签来自页面数据） */
+function renderHead(cols) {
+  $('thead').innerHTML = '<tr><th class="l">#</th><th class="l">SKU</th><th class="l">变种名</th><th class="l">Variant Name</th>' +
+    cols.map(l => '<th class="l">' + esc(l) + '</th>').join('') +
+    '<th>件数</th><th>配件</th><th>成本¥</th><th>运费¥</th><th>总成本¥</th><th>定价¥</th><th>到手¥</th><th>单件利润¥</th><th>毛利率</th><th>欧元价</th><th>€凑整</th></tr>';
+}
+
+function renderRows() {
+  const tb = $('tbody');
+  const allDims = dimsOf(PRODUCT);
+  const dims = shownDimsOf(PRODUCT);
+  const cols = colList(dims);
+  const hasDims = dims.length > 0;
+  renderHead(cols);
+  const empty = !ROWS.length;
+  $('emptyBox').style.display = empty ? 'block' : 'none';
+  if (empty) {                                  // 空态：一行都不渲染，也不显示任何算出来的数
+    tb.innerHTML = '';
+    $('rowHint').textContent = '还没有规格 —— 规格与定价全部来自抓取到的商品数据。';
+    $('formula').textContent = '还没有规格：' + (EMPTY_REASON || '先读取商品链接');
+    $('paramEcho').textContent = '';
+    if (typeof SEL === 'number') SEL = 0;
+    return;
+  }
+  tb.innerHTML = ROWS.map((r, i) => {
+    const p = r.pricing;
+    return '<tr class="' + (i === SEL ? 'sel' : '') + '" data-i="' + i + '">' +
+      '<td class="l">' + r.idx + '</td>' +
+      '<td class="l mono">' + r.sku + '</td>' +
+      '<td class="l">' + r.nameCn + ' <span class="pn">' + r.kind + '</span></td>' +
+      '<td class="l' + (r.enPending ? ' enpending' : '') + '"' + (r.enPending ? ' title="这个词表里没有，英文名还带中文 —— 请在 app.js 的 EN_WORDS 里补词，或直接把变种名改掉"' : '') + '>' + esc(r.nameEn) + '</td>' +
+      cols.map(lab => '<td class="l">' + esc((r.spec && r.spec[lab]) || (hasDims ? '' : r.colorSpec)) + '</td>').join('') +
+      '<td><input type="number" min="1" step="1" value="' + r.pcs + '" data-pcs="' + r.sku + '" style="width:60px;text-align:right"></td>' +
+      '<td><input type="checkbox" data-acc="' + r.sku + '"' + (r.accessory ? ' checked' : '') + '></td>' +
+      '<td>' + f2(p.goods + p.accessory) + '</td>' +
+      '<td>' + f2(p.freight) + '</td>' +
+      '<td>' + f2(p.totalCost) + '</td>' +
+      '<td class="price">' + f2(p.price) + '</td>' +
+      '<td>' + f2(p.net) + '</td>' +
+      '<td>' + f2(p.unitProfit) + '</td>' +
+      '<td>' + (p.ok ? (p.marginOnNet * 100).toFixed(1) + '%' : '<span class="pn">无解</span>') + '</td>' +
+      '<td class="eur">€' + f2(p.priceEur) + '</td>' +
+      '<td class="eur">€' + f2(p.priceEur99) + '</td>' +
+      '</tr>';
+  }).join('');
+  tb.querySelectorAll('input[data-pcs]').forEach(inp => {
+    inp.onchange = () => { const sku = inp.dataset.pcs; OV[sku] = Object.assign(OV[sku] || {}, { pcs: Math.max(1, parseInt(inp.value, 10) || 1) }); regen(); };
+    inp.onclick = e => e.stopPropagation();
+  });
+  tb.querySelectorAll('input[data-acc]').forEach(chk => {
+    chk.onchange = () => { const sku = chk.dataset.acc; OV[sku] = Object.assign(OV[sku] || {}, { accessory: chk.checked }); regen(); };
+    chk.onclick = e => e.stopPropagation();
+  });
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { SEL = parseInt(tr.dataset.i, 10); renderRows(); });
+  const K = V.discountFactor(params());
+  $('paramEcho').textContent = '折扣系数 K = ' + K.toFixed(4) +
+    '（' + ($('stackMode').value === 'add' ? '相加' : '乘性') + '）；' +
+    '『到手价』= 定价 × K = 折扣后真实入账价。';
+  const fl = (() => { try { return V.floorDetail(ROWS, params()); } catch (e) { return { applied: false, enabled: false }; } })();
+  const noColors = NO_COLORS;
+  const dimTxt = dims.length
+    ? dims.map(d => d.label + ' ' + d.values.length + ' 值' + (d.partLabels ? '（' + d.partLabels.join('/') + '）' : '')).join(' × ') +
+      (allDims.length > dims.length
+        ? '（页面上还有 ' + (allDims.length - dims.length) + ' 级规格没显示：' + allDims.slice(dims.length).map(d => d.label).join('/') + '，可调「规格列上限」）'
+        : '')
+    : '无规格值（单色兜底）';
+  const trunc = ROWS[ROWS.length - 1] && ROWS[ROWS.length - 1].truncated;
+  const enPend = ROWS.filter(r => r.enPending).length;
+  $('rowHint').textContent = '共 ' + ROWS.length + ' 个变种（原规格 ' + ROWS.filter(r => r.kind === '原规格').length + ' 个）' +
+    ' ｜ 规格：' + dimTxt +
+    (enPend ? ' ｜ 有 ' + enPend + ' 行英文名还带中文（词表里没收录，标黄了）：在 app.js 的 EN_WORDS 里补词，或直接在表格里改' : '') +
+    (trunc ? ' ｜ 规格组合太多，只保留前 ' + trunc.kept + ' 行（本来 ' + trunc.total + ' 行）' : '') +
+    (noColors ? ' ｜ 没读到规格值 → 这是「单色兜底」方案，不是完整规格（该商品规格可能需要登录才可见：在抓取窗口登录一次，或退出 Chrome 后双击 import-chrome-login.cmd 导入登录态，再重读）' : '') +
+    (fl.applied
+      ? ' ｜ 低价兜底已触发：有 ' + fl.lowCount + ' 个规格原定价 < ¥' + fl.threshold + ' → 所有规格定价 +¥' + fl.add
+      : (fl.enabled ? ' ｜ 低价兜底未触发（没有规格低于 ¥' + fl.threshold + '）' : ' ｜ 低价兜底已关闭')) + AI_NOTE;
+  if (!ROWS.length) $('formula').textContent = '还没有规格。先导入商品或手工填颜色。';
+  else $('formula').textContent = ROWS[SEL].sku + '  ' + ROWS[SEL].nameCn + '\n' + V.formulaLines(ROWS[SEL], params()).join('\n');
+}
+
+/* ---------- 自动抓取 ---------- */
+async function startFetch() {
+  const url = $('url').value.trim();
+  if (!/^https?:\/\//.test(url)) { setStatus('error', '请把商品链接完整粘进来（http/https 开头）'); return; }
+  if (location.protocol === 'file:') { setStatus('error', '直接打开文件时无法自动抓取，请用 serve.cmd 启动后从 http://127.0.0.1:8901/ 打开'); return; }
+  $('btnFetch').disabled = true;
+  setStatus('opening', '正在启动浏览器…');
+  let id;
+  try {
+    const r = await fetch('/api/fetch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, force: true }) });
+    const j = await r.json();
+    if (j.error) { setStatus('error', j.error); $('btnFetch').disabled = false; return; }
+    if (j.cached) setStatus('ready', '这个链接刚抓过：直接用 ' + Math.floor((j.ageSec || 0) / 60) + ' 分钟前的缓存结果（没有再次打扰 1688）');
+    id = j.id;
+  } catch (e) { setStatus('error', '本地服务没响应：' + e.message); $('btnFetch').disabled = false; return; }
+
+  clearInterval(TIMER);
+  TIMER = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/status?id=' + id)).json();
+      setStatus(s.state || 'waiting', s.hint || '', s.elapsed ? '已等待 ' + s.elapsed + ' 秒' : '');
+      if (s.state === 'ready' && s.product) {
+        clearInterval(TIMER); $('btnFetch').disabled = false;
+        onProduct(s.product, '（自动抓取）');
+      } else if (s.state === 'error' || s.state === 'timeout') {
+        clearInterval(TIMER); $('btnFetch').disabled = false;
+        if (s.log && s.log.length) setStatus(s.state, s.hint || '', s.log.slice(-3).join('<br>'));
+      }
+    } catch (e) { /* 服务重启等瞬时错误继续轮询 */ }
+  }, 1200);
+}
+
+/* ---------- 手动导入 ---------- */
+function importText(text, url) {
+  const prod = P.parse(text, { url: url || $('url').value.trim() || null });
+  onProduct(prod, '（手动导入：' + (prod.missing.length ? '缺 ' + prod.missing.join('、') + '，请补' : '字段齐全') + '）');
+  setStatus('ready', '已解析手动导入的内容。');
+}
+$('btnParse').onclick = () => {
+  const t = $('paste').value;
+  if (!t.trim()) { setStatus('error', '先粘点内容进来'); return; }
+  importText(t);
+};
+$('fileIn').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => importText(String(fr.result), '');
+  fr.readAsText(f, 'utf-8');
+};
+['dragover','drop'].forEach(ev => document.addEventListener(ev, e => e.preventDefault()));
+document.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => importText(String(fr.result), '');
+  fr.readAsText(f, 'utf-8');
+});
+
+/* ---------- 导出 ---------- */
+function download(name, text, mime) {
+  const blob = new Blob(['\ufeff' + text], { type: (mime || 'text/csv') + ';charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('btnCsv').onclick = () => {
+  if (!ROWS.length) { setStatus('error', '还没有规格可导出：' + (EMPTY_REASON || '先读取商品链接')); return; }
+  const dims = shownDimsOf(PRODUCT);
+  const cols = colList(dims);
+  const head = ['SKU','变种名','Variant Name'].concat(cols)
+    .concat(['件数','配件','拿货成本(元)','运费(元)','总成本(元)','定价(元)','到手价(元)','单件利润(元)','毛利率','欧元价','欧元凑整价','低价兜底(元)']);
+  const lines = [head.join(',')];
+  ROWS.forEach(r => {
+    const p = r.pricing;
+    const specVals = cols.map(lab => (r.spec && r.spec[lab]) || (dims.length ? '' : r.colorSpec));
+    lines.push([r.sku, r.nameCn, r.nameEn].concat(specVals).concat([r.pcs, r.accessory ? '含配件' : '无',
+      f2(p.goods), f2(p.freight), f2(p.totalCost), f2(p.price), f2(p.net), f2(p.unitProfit),
+      (p.marginOnNet * 100).toFixed(1) + '%', '€' + f2(p.priceEur), '€' + f2(p.priceEur99),
+      f2(p.priceBoost || 0)])
+      .map(x => String(x).includes(',') ? '"' + x + '"' : x).join(','));
+  });
+  download('变种定价表.csv', lines.join('\r\n'));
+};
+$('btnFormulas').onclick = () => {
+  if (!ROWS.length) { setStatus('error', '还没有规格可导出：' + (EMPTY_REASON || '先读取商品链接')); return; }
+  const out = ['SHEIN 选品定价台 —— 全部变种公式与定价',
+    '商品：' + ((PRODUCT && PRODUCT.title) || '—'),
+    '链接：' + ((PRODUCT && PRODUCT.source && PRODUCT.source.url) || '—'),
+    '参数：' + JSON.stringify(params()),
+    '变种计划来源：' + (AI_PLAN ? ('DeepSeek ' + (AI_PLAN.model || '') + '（' + (AI_PLAN.rows || []).length + ' 行' +
+      ((AI_PLAN.skipped || []).length ? '，跳过 ' + AI_PLAN.skipped.map(s => s.value).join('、') : '') + '）') : '引擎规则'), ''];
+  ROWS.forEach(r => { out.push('【' + r.idx + '】' + r.sku + '  ' + r.nameCn + '（' + r.nameEn + '）'); out.push(...V.formulaLines(r, params()).map(l => '    ' + l)); out.push(''); });
+  download('变种公式与定价.txt', out.join('\r\n'), 'text/plain');
+};
+$('btnRegen').onclick = () => {
+  if (!PRODUCT) { setStatus('error', '还没有商品：先「读取商品」或「载入示例」，规格只能按抓到的数据生成。'); return; }
+  if ($('planMode') && $('planMode').value === 'ai') { aiPlanNow(); return; }   // AI 档下 = 再排一版
+  OV = {}; regen(true); setStatus('ready', '已按当前参数重新生成规格。');
+};
+$('btnAi').onclick = () => { if ($('planMode')) $('planMode').value = 'ai'; aiPlanNow(); };
+$('planMode').addEventListener('change', () => {
+  if ($('planMode').value === 'ai') { if (PRODUCT) aiPlanNow(); else setStatus('error', '还没有商品：先「读取商品」，再让 DeepSeek 排变种。'); return; }
+  AI_PLAN = null; AI_NOTE = ' ｜ 变种计划：引擎规则'; $('aiBox').innerHTML = ''; OV = {}; regen(true);
+});
+$('btnFetch').onclick = startFetch;
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') startFetch(); });
+
+/* ---------- 示例数据（离线可玩） ---------- */
+$('btnDemo').onclick = () => {
+  const fs = null;
+  const demo = [
+    '# 腋毛刀腿毛刮毛刀男女通用防滑剃毛刀微距刀片剃毛工具手动刮毛刀',
+    '店铺 义乌市远强不锈钢制品有限公司',
+    '限时1折 ¥0.03 10件混批',
+    '以下为离线示例文本：用于演示解析与定价流程，字段结构与真实商品页保持一致，不需要联网即可试跑一遍。颜色、库存、价格、重量、箱装数量均取自真实抓取结果，下面一行才是分销代发的价格档位。',
+    '分销代发 ≥4件 ¥0.34',
+    '颜色',                                   // 规格维度标签行（真实页面就是这样，解析器按结构识别，不写死）
+    '粉色#C1Y1P#', '¥0.34', '库存6853667件',
+    '绿色#C1Y1Q#', '¥0.34', '库存6853766件',
+    '紫色#C1Y1R#', '¥0.34', '库存6853617件',
+    '| 品牌 | 纳合 |', '| 产品类别 | 刮毛刀 |', '| 箱装数量 | 1000 |', '| 重量(g) | 13 |',
+    '| 是否进口 | 否 |', '| 是否跨境出口专供货源 | 否 |', '| 是否有专利 | 否 |', '| 剃须刀刀片 | 1 |'
+  ].join('\n');
+  importText(demo, 'https://detail.1688.com/offer/1063828892516.html');
+};
+
+/* ---------- 参数联动 ---------- */
+['unitCost','accessoryCost','freightRate','bargain','discount','stackMode','margin','marginBase','fxRate','floorThreshold','floorAdd','maxDims','costMode']
+  .forEach(id => $(id).addEventListener('input', () => regen()));
+['unitCost','accessoryCost','freightRate','bargain','discount','stackMode','margin','marginBase','fxRate','floorThreshold','floorAdd','maxDims','costMode']
+  .forEach(id => $(id).addEventListener('change', () => regen()));
+$('maxDims').addEventListener('change', () => { if (PRODUCT) renderSpecInputs(PRODUCT); });   // 改上限要把规格输入也重排
+regen(true);
+</script>
+</body>
+</html>
