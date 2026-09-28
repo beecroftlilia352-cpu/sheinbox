@@ -13,6 +13,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { packQtyOf, naturalPcsOf } = require('./app.js');   // 「5片装」→5 等口径与定价引擎共用，别各写一套
 
 const MAX_ROWS = 36;
 const MAX_PCS = 12;
@@ -45,23 +46,28 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
 铁律：
 1) 规格值只能从给定数据里逐字复制，绝不新增、改写、翻译规格值本身（不要发明颜色/尺码/型号）。
 2) 不要给任何价格、成本、利润数字——定价由系统另算。
-3) **你的核心产出是「变种设计」，不是把页面规格抄一遍。** 抄一遍等于没干活。两件事都必须做到：
-   a. 覆盖：每个基础规格值至少出现一次 —— 自己单独一行，或者作为某个变种的一部分；
-      确实不该上架的（如「清仓随机款」这类不确定款）才放进 skipped 并写原因。
-   b. 差异化（这是重点，**必须做**）：在此之上设计出真正不一样的卖法，让同一件货有几档。
+3) **你的核心产出是「变种设计」，不是把页面规格抄一遍。** 抄一遍等于没干活。三件事都必须做到：
+   a. 覆盖（底线）：**每个基础规格值都必须有它自己的一件装行** —— values 里「每个可见规格维度各取一个值」
+      （也就是页面上那个 SKU 本身），pcs = 这一件：规格值名自带件数（如「5片装」）就写它自带的数，
+      没有自带件数就是 1。**只有这种行才算覆盖了这个值。**
+      · **绝不许把基础行改成多件装（pcs>1）或往一行里塞同一维度的两个值来充当覆盖** ——
+        那样整张表里就没有一件装可上架了，卖家会以为件数被凭空翻了倍。
+      · 确实不该上架的（如「清仓随机款」这类不确定款）才放进 skipped 并写原因。
+   b. 差异化（这是重点，**必须做**）：在覆盖行**之外额外追加**真正不一样的卖法，让同一件货有几档。
       **至少要有 3~5 行是「设计出来的」**（多件装 / 混搭 / 大包装 / 套装），不管规格值多少 —— 一个商品只给
       「每个规格值一行」等于没设计。手段按商品自己判断（别生搬）：
       · 多件装：pcs 写 2 / 3 / 5 / 6 / 9 …（易耗品、低单价小件优先；单价高的别硬凑）
       · 混搭/组合：一行里选 2 个以上规格值（如 A 色 + B 色 各一件），values 写全它们
       · 大包装/囤货档：件数更多的那一档
       · 套装/配件：**只有这份商品确实带配件时**（标题或规格里提到收纳盒/赠品/套装等）才写 accessory=true
-   c. 省行的覆盖办法：一行里放多个值（混搭）就能同时覆盖它们，不必每个值都单独占一行 ——
-      用这个办法把行数让出来给设计款，别把 maxRows 全花在「一值一行」上。
+   c. 行数预算：**先排满覆盖行（一件装），再有空间才加设计款**；多件装/混搭是额外的行，不是覆盖的替代品。
+      行数不够时宁可少加设计款，也不要动覆盖行。规格值多的商品，一件装行就是会占掉大部分行数，这是对的。
    d. 总量：尽量排到 6~maxRows 个变种；宁少勿乱、宁精勿堆。
 4) 件数与组合完全由你判断（这正是叫你来思考的原因），但：
    - pcs = 这一行卖几件（1~12），要符合商品实际；
    - 规格值名里自带件数的（如「5片装」）→ pcs 就按它写（5），不要把整包当成 1 件；
    - kind = 你自己给这一行起一个 ≤8 字的短标签，说明这行是什么（单品 / 多件装 / 混搭 / 套装…随便你起）。不要写价格。
+   - **名字里写了几件，就必须跟 pcs 一致**：pcs=3 就写「×3 / 3件装」，不要出现 pcs=10 而名字写「×20」这种对不上的情况。
 5) 行的顺序 = 上架顺序，最想主推的排前面；总行数不超过 maxRows。
 6) 每个变种给两个名字，都要能看出这一行到底卖的是什么：
    nameEn = 英文名，必须纯英文（可含数字、x、-、+、尺寸与型号编码），用欧洲买家看得懂的说法，不要拼音、不要中文；
@@ -137,11 +143,36 @@ function parseJsonLoose(txt) {
   return null;
 }
 
+/* 名字里自称的件数（「×3」「3件装」「x5 Pack」）。
+ * ⚠ 千万别把尺寸/型号里的数字当件数：「30cm*30cm」「3411牛角」「C20侧标」都不是件数，
+ *   所以只认「×/x + 数字」或「数字 + 件装/片装/双装/Pack」这两种明确写法。 */
+const PCS_CLAIM_RE = /(?:×|✕|\bx)\s*(\d{1,2})(?![\d.])|(\d{1,2})\s*(?:件装|件套|双装|条装|片装|枚装|支装|套装|Pack)/i;
+function claimedPcs(name) {
+  const m = PCS_CLAIM_RE.exec(String(name == null ? '' : name));
+  if (!m) return 0;
+  const n = Number(m[1] || m[2]);
+  return n >= 1 && n <= 99 ? n : 0;
+}
+function clampCountInName(name, cap) {
+  return String(name).replace(PCS_CLAIM_RE, (whole, a, b) => (a ? whole.replace(a, String(cap)) : whole.replace(b, String(cap))));
+}
+
 /* ---------- 硬校验：AI 只许用页面上的值，钱不归它管 ---------- */
 function validatePlan(product, plan) {
   const errs = [];
   const all = new Map();                       // 值名 → 值对象（允许重名不同编码：按名字比对即可）
   ((product && product.specs) || []).forEach(d => (d.values || []).forEach(v => all.set(String(v.name).trim(), v)));
+  // 每个「可见规格维度」的值集合：用来判断一行是不是页面上的一个 SKU（每个维度各取一个值）
+  const dimSets = ((product && product.specs) || [])
+    .map(d => new Set((d.values || []).map(v => String(v.name).trim()))).filter(s => s.size);
+  if (!dimSets.length && Array.isArray(product && product.colors)) {
+    const cs = new Set(product.colors.map(c => String(c.name).trim()).filter(Boolean));
+    if (cs.size) dimSets.push(cs);
+  }
+  const onePerDim = vals => dimSets.length ? (vals.length === dimSets.length && dimSets.every(s => vals.filter(v => s.has(v)).length === 1))
+    : vals.length === 1;
+  // 一行的「天然件数」：同一维度内相加、维度之间相乘（颜色 1 件 × 尺码 1 件 = 1 件，不是 2 件）
+  const inherentPcs = vals => naturalPcsOf(dimSets.map(s => vals.filter(v => s.has(v))).filter(g => g.length));
   if (!all.size) errs.push('这个商品没有规格数据，AI 计划无从校验');
   if (!plan || !Array.isArray(plan.plan)) { errs.push('返回里没有 plan 数组'); return { errs, rows: [], used: new Set(), skipped: [], nameCnDropped: [] }; }
 
@@ -171,9 +202,21 @@ function validatePlan(product, plan) {
     // 不再拿一份词表去卡它 —— 之前用词表卡掉「双支装/收纳盒」这类词，等于禁止它设计变种，AI 档就变成了抄写员。
     const cnBad = /[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn);
     if (cnBad) { nameCn = ''; nameCnDropped.push(i + 1); }
+    // 名字里写了几件就得跟 pcs 一致：写成「×20 件装」而 pcs=10，卖家看到的就是件数错乱
+    let pcsFinal = Math.round(pcs);
+    const claim = claimedPcs(nameCn || '') || claimedPcs(nameEn || '');
+    if (claim && claim !== pcsFinal) {
+      if (claim <= MAX_PCS) { pcsFinal = claim; pcsAligned++; }
+      else {                                   // 名字吹到超过上限 → 件数夹到上限，并把名字里的数字同步改掉
+        pcsFinal = MAX_PCS;
+        if (nameCn) nameCn = clampCountInName(nameCn, MAX_PCS);
+        nameEn = clampCountInName(nameEn, MAX_PCS);
+        pcsClamped++;
+      }
+    }
     if (unknown.length || !vals.length) return;
     rows.push({
-      kind, values: vals, pcs: Math.round(pcs), accessory,
+      kind, values: vals, pcs: pcsFinal, accessory,
       nameCn: nameCn || null, nameEn
     });
   });

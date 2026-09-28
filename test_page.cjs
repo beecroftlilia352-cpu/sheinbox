@@ -323,6 +323,43 @@ async function aiPageChecks() {
     parseFloat(cellTxt(packIdx, priceCol2)) < parseFloat(cellTxt(tenIdx, priceCol2)) &&
     parseFloat(cellTxt(packIdx, priceCol2)) < 30,
     `${cellTxt(packIdx, priceCol2)} < ${cellTxt(tenIdx, priceCol2)}`);
+
+  /* ★ 双规格（颜色 × 尺码）的「一双鞋被算成两件」：用户看着截面问「件数为什么翻倍了」。
+   * 一件装行的件数必须是 1、成本必须是单件价（11.5），不是 2 件 / 23.00。 */
+  w.onerror = (m) => { w.__lastErr = String(m); };
+  try { w.eval('PRODUCT.source={offerId:"841299382846"}; PRODUCT.suggestedUnitCost=11.5; PRODUCT.specs=[' +
+    '{label:"颜色",values:[{name:"白色【3411牛角】",code:null,price:11.5,stock:9},{name:"粉红【3411牛角】",code:null,price:11.5,stock:9}]},' +
+    '{label:"尺码",values:[{name:"36-37适合35-36码",code:null,price:11.5,stock:9},{name:"40-41适合39-40码",code:null,price:11.5,stock:9}]}' +
+    ']; PRODUCT.colors=[]; onProduct(PRODUCT,"双规格测试");'); } catch (e) { console.log('EVAL ERR', e.message); }
+  $('costMode').value = 'spec';
+  // 上一轮 AI 调用没结束前按钮是 disabled，点了会被忽略 → 等它可用，并清掉上一版计划
+  for (let i = 0; i < 60 && $('btnAi').disabled; i++) await w.eval('new Promise(r => setTimeout(r, 20))');
+  w.eval('AI_PLAN = null; AI_NOTE = ""; OV = {};');
+  w.fetch = async () => ({ json: async () => ({ ok: true, model: 'deepseek-flash', elapsedSec: 4, notes: [], skipped: [], nameCnUsed: 2,
+    rows: [
+      { kind: '单品', values: ['白色【3411牛角】', '36-37适合35-36码'], pcs: 1, accessory: false, nameCn: '白色【3411牛角】 36-37适合35-36码 单件', nameEn: 'White 36-37' },
+      { kind: '两件装', values: ['白色【3411牛角】', '36-37适合35-36码'], pcs: 2, accessory: false, nameCn: '白色【3411牛角】 ×2 两双装', nameEn: 'White 36-37 x2' }
+    ] }) });
+  $('btnAi').click();
+  await w.eval('new Promise(r => setTimeout(r, 40))');
+  for (let i = 0; i < 60 && $('btnAi').disabled; i++) await w.eval('new Promise(r => setTimeout(r, 20))');
+  const pcsCol3 = colExact('件数'), costCol3 = colExact('成本¥');
+  const oneIdx = rows().findIndex(tr => /单件/.test(tr.children[2].textContent));
+  const twoIdx = rows().findIndex(tr => /两双装/.test(tr.children[2].textContent));
+  check('双规格：一件装行件数 = 1（颜色 1 件 × 尺码 1 件，不是 2 件）',
+    rows()[oneIdx] && rows()[oneIdx].children[pcsCol3].querySelector('input').value === '1',
+    rows()[oneIdx] && rows()[oneIdx].children[pcsCol3].querySelector('input').value);
+  check('双规格：一件装行成本 = 11.50（不是 23.00）', cellTxt(oneIdx, costCol3) === '11.50', cellTxt(oneIdx, costCol3));
+  check('双规格：一件装行定价 ≈ 27.77（不是按两件算的 55.53）',
+    /^27\.7/.test(cellTxt(oneIdx, colExact('定价¥'))), cellTxt(oneIdx, colExact('定价¥')));
+  check('双规格：两件装行件数仍然是 2（设计款不受影响）',
+    rows()[twoIdx] && rows()[twoIdx].children[pcsCol3].querySelector('input').value === '2',
+    rows()[twoIdx] && rows()[twoIdx].children[pcsCol3].querySelector('input').value);
+
+  // 复位前先等这次 AI 调用彻底收尾（它的 promise 链还会再 regen 一次），否则后面的用例看到的是半旧半新的表
+  for (let i = 0; i < 60 && $('btnAi').disabled; i++) await w.eval('new Promise(r => setTimeout(r, 20))');
+  await w.eval('new Promise(r => setTimeout(r, 30))');
+  w.eval('AI_PLAN = null; AI_NOTE = ""; OV = {}; onProduct(PRODUCT, "双规格复位");');
 }
 
 (async () => {
@@ -419,9 +456,10 @@ async function copyBtnChecks() {
   const origExec = d.execCommand;
   d.execCommand = () => { const ta = d.querySelector('textarea[readonly]'); copied = ta ? ta.value : null; return true; };
   const b0 = btns()[0];
+  const want0 = b0.dataset.copy;
   b0.click();
   await new Promise(r => setTimeout(r, 15));
-  check('局域网（没有 clipboard API）也能复制：走 execCommand 回退', copied === names()[0], JSON.stringify(copied));
+  check('局域网（没有 clipboard API）也能复制：走 execCommand 回退', copied === want0, JSON.stringify(copied) + ' vs ' + JSON.stringify(want0));
   check('点完按钮变成「已复制」', /已复制/.test(b0.textContent), b0.textContent);
   await new Promise(r => setTimeout(r, 1300));
   check('1.2 秒后按钮恢复成「复制」', b0.textContent === '复制', b0.textContent);

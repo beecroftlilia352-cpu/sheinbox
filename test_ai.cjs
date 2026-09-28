@@ -36,7 +36,12 @@ check('提示词把「设计变种」写成核心职责（不是把规格抄一�
 check('提示词列出差异化的手段（多件装/混搭/大包装/套装）',
   /多件装/.test(msgs[0].content) && /混搭/.test(msgs[0].content) && /大包装/.test(msgs[0].content) && /套装\/配件/.test(msgs[0].content));
 check('提示词要求覆盖 + 差异化两件事都做，并给出总量下限（6~maxRows）',
-  /覆盖：每个基础规格值至少出现一次/.test(msgs[0].content) && /尽量排到 6~maxRows/.test(msgs[0].content));
+  /覆盖（底线）/.test(msgs[0].content) && /尽量排到 6~maxRows/.test(msgs[0].content));
+check('提示词把「覆盖」定义成必须有它自己的一件装行（每个可见规格维度各取一个值）',
+  /每个基础规格值都必须有它自己的一件装行/.test(msgs[0].content) && /只有这种行才算覆盖/.test(msgs[0].content));
+check('提示词明令禁止拿覆盖行去凑多件装/混搭（否则整表没有一件装，用户看到的就是「件数翻倍」）',
+  /绝不许把基础行改成多件装/.test(msgs[0].content) && /翻了倍/.test(msgs[0].content));
+check('提示词要求名字里写的件数必须与 pcs 一致', /名字里写了几件，就必须跟 pcs 一致/.test(msgs[0].content));
 check('提示词不再禁止模型写多件装/配件这类词（那是设计，不是模板）',
   !/绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content) && /件数写件数/.test(msgs[0].content));
 check('提示词里没有密钥、也没有要求它算钱', !/apiKey|sk-/.test(msgs[1].content));

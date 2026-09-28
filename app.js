@@ -201,7 +201,8 @@
     const base = [], extra = [];                             // 真实规格行在前；AI 规划的组合行在后（封顶时先丢后面的）
     const add = (o, isBase, vals) => {
       // 整包卖的规格（值名里带「5片装」这类自带件数）→ 件数必须是它的整数倍，否则会算出「半包」这种不存在的货
-      const bq = (vals || []).filter(Boolean).reduce((a, v) => a + packQtyOf(v.name), 0);
+      // 天然件数 = 同一维度内相加、维度之间相乘（不能把颜色+尺码直接相加，那是「一双算两件」）
+      const bq = naturalPcsOf(groupByDim(dims, vals));
       if (bq > 1) o.pcs = Math.max(bq, Math.round((n(o.pcs) || 1) / bq) * bq);
       // 成本价怎么取：默认「按各规格自己的标价」（1688 常写成打包阶梯：单片/5片装/10片装价不一样）
       o.unitCost = (p.costMode === 'param') ? n(p.unitCost) : rowUnitCost(vals, o.pcs, p.unitCost);
@@ -227,7 +228,8 @@
         }));
         const head = picked.length > 1 ? mixHead(vals) : pcode(prim.value, primary.values.indexOf(prim.value));
         // 每个值「天然几件」（5片装=5）→ 整包卖：件数取整包的整数倍，别出现「半包」
-        const bq = picked.reduce((a, x) => a + packQtyOf(x.value.name), 0) || 1;
+        // ⚠ 按维度分组相乘，不能把用到的值直接相加：一双 = 颜色 1 件 × 尺码 1 件 = 1 件（相加会变成 2 件）
+        const bq = naturalPcsOf(dims.map(d => picked.filter(x => x.dim === d).map(x => x.value)).filter(g => g.length));
         const rawPcs = Math.max(1, Math.round(n(r.pcs) || 1));
         const pcs = bq > 1 ? Math.max(bq, Math.round(rawPcs / bq) * bq) : rawPcs;
         // 名字只允许来自两处：模型写的（AI 档），或者**页面上抓到的规格值原文**。
@@ -321,6 +323,22 @@
   }
   const variantPriceBoost = (rows, params) => floorDetail(rows, params).boost;
 
+  /* 一行「天然几件」= 同一规格维度内各值件数**相加**，不同维度之间**相乘**。
+   * 关键：不能把一行用到的规格值直接相加 ——
+   *   一双鞋 = 颜色 1 件 × 尺码 1 件 = 1 件，直接相加会算成 2 件（用户报的「件数翻倍」就是这个）。
+   *   2 色（各 1 件）× 1 码 = 2 件；2 色 × 2 码 = 4 件；5片装 × 1 色 = 5 件。 */
+  const pcsOfOne = v => packQtyOf(v && v.name != null ? v.name : v);
+  function naturalPcsOf(groups) {
+    const gs = (groups || []).filter(g => g && g.length);
+    if (!gs.length) return 1;
+    return gs.reduce((a, g) => a * g.reduce((s, v) => s + pcsOfOne(v), 0), 1) || 1;
+  }
+  /* 把一行的值按维度分组（用于算天然件数） */
+  function groupByDim(dims, vals) {
+    return (dims || []).map(d => (vals || []).filter(v => (d.values || []).indexOf(v) >= 0))
+      .filter(g => g.length);
+  }
+
   /* 公式展示：带代入数值，便于核对 */
   function formulaLines(v, params) {
     const p = Object.assign({}, DEFAULTS, params || {});
@@ -350,5 +368,5 @@
     return lines;
   }
 
-  return { DEFAULTS, discountFactor, priceVariant, buildVariants, rowUnitCost, packQtyOf, floorDetail, variantPriceBoost, formulaLines, COLOR_EN, specDims, specOfValues, enOf, hasCJK };
+  return { DEFAULTS, discountFactor, priceVariant, buildVariants, rowUnitCost, packQtyOf, naturalPcsOf, groupByDim, floorDetail, variantPriceBoost, formulaLines, COLOR_EN, specDims, specOfValues, enOf, hasCJK };
 });

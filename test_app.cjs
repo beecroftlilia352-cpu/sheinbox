@@ -350,5 +350,41 @@ check('不传 AI 计划时走引擎规则：3 个规格值 → 3 行，全是值
   V.buildVariants(aiProd, { unitCost: 11.5 }).length === 3 &&
   V.buildVariants(aiProd, { unitCost: 11.5 }).every(r => !UNIT_WORDS.test(r.nameCn)));
 
+/* ---------- 天然件数：同一维度内相加、维度之间相乘 ----------
+ * 用户报的「件数为什么翻倍了」就是这里算错：颜色 1 件 + 尺码 1 件 = 2 件（应该相乘 = 1 件）。
+ * 双规格商品上一双鞋被当成两件卖，成本 11.5 变 23、定价跟着翻倍。 */
+const V_ = V;
+near('天然件数：颜色 1 件 × 尺码 1 件 = 1 件（不是 2 件）',
+  V_.naturalPcsOf([[{ name: '白色' }], [{ name: '36-37适合35-36码' }]]), 1);
+near('天然件数：2 色 × 1 码 = 2 件',
+  V_.naturalPcsOf([[{ name: '白色' }, { name: '黑色' }], [{ name: '36-37' }]]), 2);
+near('天然件数：2 色 × 2 码 = 4 件',
+  V_.naturalPcsOf([[{ name: '白色' }, { name: '黑色' }], [{ name: '36-37' }, { name: '40-41' }]]), 4);
+near('天然件数：单个「5片装」值 = 5 件', V_.naturalPcsOf([[{ name: '灰色30cm*30cm*5片装' }]]), 5);
+near('天然件数：空行兜底 = 1 件', V_.naturalPcsOf([]), 1);
+near('天然件数：尺寸里的数字不被当件数（30cm*30cm → 1）',
+  V_.naturalPcsOf([[{ name: '灰色30cm*30cm' }]]), 1);
+
+// 双规格 + AI 计划：模型给 pcs=1 的一件装行，件数就必须是 1、成本就是单件价
+const twoDimProd = {
+  source: { offerId: '841299382846' }, suggestedUnitCost: 11.5,
+  specs: [
+    { label: '颜色', values: [{ name: '白色【3411牛角】', code: null, price: 11.5 }, { name: '粉红【3411牛角】', code: null, price: 11.5 }] },
+    { label: '尺码', values: [{ name: '36-37适合35-36码', code: null, price: 11.5 }, { name: '40-41适合39-40码', code: null, price: 11.5 }] }
+  ]
+};
+const aiTwo = V.buildVariants(twoDimProd, { unitCost: 11.5, costMode: 'spec', aiPlan: { rows: [
+  { kind: '单品', values: ['白色【3411牛角】', '36-37适合35-36码'], pcs: 1, accessory: false, nameEn: 'White 36-37' },
+  { kind: '两件装', values: ['白色【3411牛角】', '36-37适合35-36码'], pcs: 2, accessory: false, nameEn: 'White 36-37 x2' },
+  { kind: '混搭', values: ['白色【3411牛角】', '粉红【3411牛角】', '36-37适合35-36码'], pcs: 2, accessory: false, nameEn: 'White+Pink 36-37' }
+] } });
+check('双规格 AI 行：一件装行的件数 = 1（不是 2）', aiTwo[0] && aiTwo[0].pcs === 1, aiTwo[0] && aiTwo[0].pcs);
+near('双规格 AI 行：一件装行的每件成本 = 11.5（不是 23）',
+  aiTwo[0] && aiTwo[0].unitCost, 11.5);
+// 11.5 + 运费 10% = 12.65 总成本 → 12.65 ÷ (0.68×0.67) = 27.77（曾被算成约两倍）
+near('双规格 AI 行：一件装行的定价 = 27.77（不是按两件算的 55.53）', aiTwo[0] && aiTwo[0].pricing.price, 27.77);
+check('双规格 AI 行：两件装行件数 = 2', aiTwo[1] && aiTwo[1].pcs === 2, aiTwo[1] && aiTwo[1].pcs);
+check('双规格 AI 行：2 色混搭行件数 = 2（同维度两个值相加）', aiTwo[2] && aiTwo[2].pcs === 2, aiTwo[2] && aiTwo[2].pcs);
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);
