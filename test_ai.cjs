@@ -31,8 +31,14 @@ check('提示词要求逐字复制规格值', /逐字复制/.test(msgs[0].conten
 check('提示词带上 maxRows，且不再规定任何组合类别（kinds 白名单已删）',
   payload.rules.maxRows === 30 && payload.rules.kinds === undefined, JSON.stringify(payload.rules));
 check('提示词明说 kind 由模型自己起短标签（引擎不规定类别）', /你自己给这一行起/.test(msgs[0].content));
-check('提示词明令不许自己造单位/配件词（双支装/收纳盒这类）',
-  /绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content), '没写这条规矩');
+check('提示词把「设计变种」写成核心职责（不是把规格抄一遍）',
+  /核心产出是「变种设计」/.test(msgs[0].content) && /抄一遍等于没干活/.test(msgs[0].content));
+check('提示词列出差异化的手段（多件装/混搭/大包装/套装）',
+  /多件装/.test(msgs[0].content) && /混搭/.test(msgs[0].content) && /大包装/.test(msgs[0].content) && /套装\/配件/.test(msgs[0].content));
+check('提示词要求覆盖 + 差异化两件事都做，并给出总量下限（6~maxRows）',
+  /覆盖：每个基础规格值至少出现一次/.test(msgs[0].content) && /尽量排到 6~maxRows/.test(msgs[0].content));
+check('提示词不再禁止模型写多件装/配件这类词（那是设计，不是模板）',
+  !/绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content) && /件数写件数/.test(msgs[0].content));
 check('提示词里没有密钥、也没有要求它算钱', !/apiKey|sk-/.test(msgs[1].content));
 check('提示词要模型写中文变种名（nameCn）与英文名（nameEn）', /nameCn/.test(msgs[0].content) && /nameEn/.test(msgs[0].content));
 check('提示词明确中文名不许带价格/成本', /不要价格\/成本/.test(msgs[0].content));
@@ -160,30 +166,22 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
     JSON.stringify({ used: cn.nameCnUsed, dropped: cn.nameCnDropped }));
   check('说明里写清「有行中文名不合规」', cn.ok && (cn.notes || []).some(x => /中文名不合规/.test(x)), (cn.notes || []).join(' / '));
 
-  /* 11b) 名字里自己造单位/配件词 → 那一栏丢掉。这是用户明确要求的一条：
-   *      「不许给我写死任何单位和组合」—— 引擎不写死，也不许模型学着旧模板写。 */
-  const inventUnits = { plan: [
-    { kind: 'x', values: ['灰色30cm*30cm'], pcs: 1, nameCn: '灰色30cm*30cm 单支装', nameEn: 'Grey' },
-    { kind: 'x', values: ['白色30cm*30cm'], pcs: 1, nameCn: '白色30cm*30cm 混合双支装 组合装', nameEn: 'White' },
-    { kind: 'x', values: ['36-37适合35-36码'], pcs: 1, nameCn: '36-37适合35-36码 便携收纳盒 + 带配件', nameEn: 'Size 36-37' },
-    { kind: 'x', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款 九支装（多件折扣）', nameEn: 'Random' }
+  /* 11b) 模型自己设计的变种名（多件装/混搭/套装/配件）必须原样放行 ——
+   *      这些词是**它的设计**，不是我写死的模板。曾经的错误做法是拿一份词表把它们卡掉，
+   *      结果 AI 档只能把页面规格抄一遍（用户当场指出：「你只是让deepseek给你重新排序？我需要的是变种规格」）。 */
+  const designed = { plan: [
+    { kind: '多件装', values: ['灰色30cm*30cm'], pcs: 5, nameCn: '灰色30cm*30cm 5件装', nameEn: 'Grey 30cm*30cm x5 Pack' },
+    { kind: '混搭', values: ['灰色30cm*30cm', '白色30cm*30cm'], pcs: 2, nameCn: '灰色+白色 各1支 混搭双支装', nameEn: 'Grey + White 2-Piece Mix' },
+    { kind: '套装', values: ['36-37适合35-36码'], pcs: 1, accessory: true, nameCn: '36-37适合35-36码 + 便携收纳盒', nameEn: 'Size 36-37 with Travel Case' },
+    { kind: '单品', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameCn: '清仓随机款', nameEn: 'Random Clearance' }
   ] };
-  const iu = A.normalize(prod, inventUnits, {});
-  check('名字里造单位/组合词（单支装/混合双支装/收纳盒/九支装）→ 那一栏全丢',
-    iu.ok && iu.rows.every(r => r.nameCn === null) && iu.nameCnDropped === 4,
-    iu.ok ? JSON.stringify(iu.rows.map(r => r.nameCn)) : iu.error);
-  check('丢的只是那一栏，行本身还在', iu.ok && iu.rows.length === 4);
-
-  const packProd = { title: '拼接地板', specs: [{ label: '规格', values: [
-    { name: '灰色30cm*30cm*5片装', code: null, price: 11.5, stock: 9 }] }] };
-  const legit = A.normalize(packProd, { plan: [{ kind: 'x', values: ['灰色30cm*30cm*5片装'], pcs: 5,
-    nameCn: '灰色30cm*30cm*5片装 ×5', nameEn: 'Grey 30cm*30cm 5-Piece Pack' }] }, {});
-  check('值名里本来就有的包装写法（5片装）不算编造 → 放行',
-    legit.ok && legit.rows[0].nameCn === '灰色30cm*30cm*5片装 ×5', legit.ok ? String(legit.rows[0].nameCn) : legit.error);
-  const echo = A.normalize(packProd, { plan: [{ kind: 'x', values: ['灰色30cm*30cm*5片装'], pcs: 5,
-    nameCn: '灰色30cm*30cm*5片装 五片装', nameEn: 'Grey' }] }, {});
-  check('模型自己补的「五片装」不在数据里 → 那一栏丢掉',
-    echo.ok && echo.rows[0].nameCn === null, echo.ok ? String(echo.rows[0].nameCn) : echo.error);
+  const dz = A.normalize(prod, designed, {});
+  check('模型设计的变种名（多件装/混搭/套装/配件词）全部原样通过',
+    dz.ok && dz.rows[0].nameCn === '灰色30cm*30cm 5件装' && /混搭双支装/.test(dz.rows[1].nameCn) && /收纳盒/.test(dz.rows[2].nameCn),
+    dz.ok ? JSON.stringify(dz.rows.map(r => r.nameCn)) : dz.error);
+  check('设计出来的件数/配件标记原样保留（件数与成本口径靠它）',
+    dz.ok && dz.rows[0].pcs === 5 && dz.rows[2].accessory === true,
+    dz.ok ? JSON.stringify(dz.rows.map(r => [r.pcs, r.accessory])) : dz.error);
   const leakCase = A.normalize(prod, { plan: [
     { kind: 'x', values: ['灰色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm ×2', nameEn: 'Grey with Case' },
     { kind: 'x', values: ['白色30cm*30cm'], pcs: 1, nameCn: '白色30cm*30cm', nameEn: 'White' },

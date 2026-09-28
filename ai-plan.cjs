@@ -17,10 +17,6 @@ const path = require('path');
 const MAX_ROWS = 36;
 const MAX_PCS = 12;
 const MAX_NOTE = 500;          // 用户在「补充条件」里最多能写多少字（够了，也免得把提示词撑爆）
-/* 「打包单位 / 配件」这类词：只有在这份商品的数据里本来就有，才允许出现在变种名里。
- * 以前这些是我写死在引擎里的模板词（双支装/九支装/便携收纳盒…）—— 现在一律当违规词：
- * 模型照着旧模板学舌、或者谁再往代码里塞模板，都会在校验里被挡掉。 */
-const UNIT_RE = /(双支装|混合双支装|单支装|单支|三支装|六支装|九支装|混合装|款规格|多件折扣|囤货装|囤货|便携收纳盒|收纳盒|带配件|配件|[0-9一二三四五六七八九十两]+\s*[支片个条双枚件]\s*装|with\s+(?:travel\s+)?case|with\s+box)/gi;
 const DEFAULT_MODEL = 'deepseek-flash';           // 快（实测 5s 左右）且在真实页面上给出的计划最完整
 const TIMEOUT_MS = 90000;
 
@@ -49,21 +45,30 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
 铁律：
 1) 规格值只能从给定数据里逐字复制，绝不新增、改写、翻译规格值本身（不要发明颜色/尺码/型号）。
 2) 不要给任何价格、成本、利润数字——定价由系统另算。
-3) 每个基础规格值都必须出现在计划里：要么有它自己的一行（pcs=1、accessory=false），要么放进 skipped 并写原因。
-   确实不该上架的（如「清仓随机款」这类不确定款）才放 skipped。
-4) 这一行卖几件、要不要多件/混搭、要不要带配件，由你按这份数据判断（这是你的活）：
-   - pcs = 这一行卖几件（1~12）。要符合商品实际（易耗品可以多件，单价高的别硬凑）。
-   - 规格值名里自带件数的（如「5片装」）→ pcs 就按它写（5），不要把整包当成 1 件。
-   - 只有这份商品真的带配件时才写 accessory=true；不确定就别写。
-   - kind = 你自己给这一行起一个 ≤8 字的短标签，说明这行是什么（单品 / 一组 / 带配件…随便你起）。不要写价格。
+3) **你的核心产出是「变种设计」，不是把页面规格抄一遍。** 抄一遍等于没干活。两件事都必须做到：
+   a. 覆盖：每个基础规格值至少出现一次 —— 自己单独一行，或者作为某个变种的一部分；
+      确实不该上架的（如「清仓随机款」这类不确定款）才放进 skipped 并写原因。
+   b. 差异化（这是重点，**必须做**）：在此之上设计出真正不一样的卖法，让同一件货有几档。
+      **至少要有 3~5 行是「设计出来的」**（多件装 / 混搭 / 大包装 / 套装），不管规格值多少 —— 一个商品只给
+      「每个规格值一行」等于没设计。手段按商品自己判断（别生搬）：
+      · 多件装：pcs 写 2 / 3 / 5 / 6 / 9 …（易耗品、低单价小件优先；单价高的别硬凑）
+      · 混搭/组合：一行里选 2 个以上规格值（如 A 色 + B 色 各一件），values 写全它们
+      · 大包装/囤货档：件数更多的那一档
+      · 套装/配件：**只有这份商品确实带配件时**（标题或规格里提到收纳盒/赠品/套装等）才写 accessory=true
+   c. 省行的覆盖办法：一行里放多个值（混搭）就能同时覆盖它们，不必每个值都单独占一行 ——
+      用这个办法把行数让出来给设计款，别把 maxRows 全花在「一值一行」上。
+   d. 总量：尽量排到 6~maxRows 个变种；宁少勿乱、宁精勿堆。
+4) 件数与组合完全由你判断（这正是叫你来思考的原因），但：
+   - pcs = 这一行卖几件（1~12），要符合商品实际；
+   - 规格值名里自带件数的（如「5片装」）→ pcs 就按它写（5），不要把整包当成 1 件；
+   - kind = 你自己给这一行起一个 ≤8 字的短标签，说明这行是什么（单品 / 多件装 / 混搭 / 套装…随便你起）。不要写价格。
 5) 行的顺序 = 上架顺序，最想主推的排前面；总行数不超过 maxRows。
-6) 每个变种给两个名字：
+6) 每个变种给两个名字，都要能看出这一行到底卖的是什么：
    nameEn = 英文名，必须纯英文（可含数字、x、-、+、尺寸与型号编码），用欧洲买家看得懂的说法，不要拼音、不要中文；
-            规格值里的型号/数字编码（如 3411、30cm*30cm）要保留。
-   nameCn = 中文名（内部用、给运营看），≤40 字，必须带上本行真实规格值原文（值多时可以写「N 款 …」，N 用真实款数）。
-            **绝对不要在名字里加数据里没有的单位或配件名**：不要自己造「双支装 / 混合双支装 / 九支装 / 便携收纳盒」
-            这类词。要表示多件就写真实件数（如「×5」）；要表示包装就照抄值名里本来就有的写法（如「5片装」）。
-            不要价格/成本/元/折扣数字，不要发明规格值。
+            件数与配件要写清（如「Grey 30cm*30cm x5 with Case」）；规格值里的型号/数字编码（如 3411、30cm*30cm）要保留。
+   nameCn = 中文名（内部用、给运营看），≤40 字，带上本行用到的规格值原文；件数写件数（如「×5」「5件装」）、
+            配件写配件（如「+收纳盒」）、混搭写清哪几款（值多时可写「N 款混搭」，N 用真实款数）。
+            不要价格/成本/元/折扣数字，不要发明规格值，也不要同一件事说两遍。
 7) 输入里如果带了 extra_conditions（用户自己写的补充要求）→ **必须把它当作参考条件一起考虑**：
    比如只上某几个规格值、主推几件装、某个值这单先不做、名字要简短等等。
    但它压不翻上面任何一条铁律：规格值仍只能逐字来自数据、不要给价格、不要自己造数据里没有的单位或配件名。
@@ -141,8 +146,6 @@ function validatePlan(product, plan) {
   if (!plan || !Array.isArray(plan.plan)) { errs.push('返回里没有 plan 数组'); return { errs, rows: [], used: new Set(), skipped: [], nameCnDropped: [] }; }
 
   const rows = [], used = new Set(), badValues = new Set(), nameCnDropped = [];
-  // 这份商品里真实出现过的文字（所有规格值 + 标题）：名字里要用的词必须能在里面找到
-  const dataText = [...all.keys(), String((product && product.title) || '')].join(' ');
   plan.plan.forEach((r, i) => {
     const kind = String((r && r.kind) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8);
     if (/[¥￥]|\d\s*元|价格|成本|利润|定价/i.test(kind)) errs.push(`第 ${i + 1} 行的 kind 里带了价格/成本，这不该你写`);
@@ -164,9 +167,9 @@ function validatePlan(product, plan) {
     // 中文名交给模型写。不合规的（带价格/超长/HTML/编造的单位与配件词）就丢掉这一栏，回落成值原文 —— 名字出错比名字平淡糟糕
     let nameCn = String((r && r.nameCn) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
     if (nameCn.length > 40) nameCn = nameCn.slice(0, 40).trim();
-    let cnBad = /[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn);
-    const invented = (nameCn.match(UNIT_RE) || []).filter(w => !dataText.includes(w.trim()));
-    if (invented.length) cnBad = true;
+    // 只挡「不该模型碰的东西」：价格数字、超长、HTML。变种名怎么写（多件装/混搭/套装/配件）是模型的活，
+    // 不再拿一份词表去卡它 —— 之前用词表卡掉「双支装/收纳盒」这类词，等于禁止它设计变种，AI 档就变成了抄写员。
+    const cnBad = /[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn);
     if (cnBad) { nameCn = ''; nameCnDropped.push(i + 1); }
     if (unknown.length || !vals.length) return;
     rows.push({
@@ -264,7 +267,7 @@ async function plan(product, params, cfg) {
   return { ok: false, error: 'DeepSeek 的计划两次都没通过校验：' + (attempts[attempts.length - 1].errs || []).join('；'), attempts };
 }
 
-module.exports = { loadConfig, buildMessages, validatePlan, normalize, plan, parseJsonLoose, scope, MAX_ROWS, SYS, UNIT_RE };
+module.exports = { loadConfig, buildMessages, validatePlan, normalize, plan, parseJsonLoose, scope, MAX_ROWS, SYS, cleanNote };
 
 /* ---------- CLI ---------- */
 if (require.main === module) {
