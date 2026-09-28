@@ -558,7 +558,7 @@ function colList(dims) {
 }
 /* 表头按规格维度动态生成（父规格/子规格各一列，标签来自页面数据） */
 function renderHead(cols) {
-  $('thead').innerHTML = '<tr><th class="l">#</th><th class="l">SKU</th><th class="l">变种名</th><th class="l">Variant Name</th>' +
+  $('thead').innerHTML = '<tr><th class="l">#</th><th class="l">SKU</th><th class="l">变种名</th>' +
     cols.map(l => '<th class="l">' + esc(l) + '</th>').join('') +
     '<th>件数</th><th>配件</th><th>成本¥</th><th>运费¥</th><th>总成本¥</th><th>定价¥</th><th>到手¥</th><th>单件利润¥</th><th>毛利率</th><th>欧元价</th><th>€凑整</th></tr>';
 }
@@ -590,7 +590,6 @@ function renderRows() {
       '<td class="l"><span class="vname">' + esc(r.nameCn) + '</span>' +
         ((r.ai && r.kind) ? ' <span class="pn">' + esc(r.kind) + '</span>' : '') +
         '<button class="copy" data-copy="' + esc(r.nameCn) + '" title="复制这个变种名">复制</button></td>' +
-      '<td class="l' + (r.enPending ? ' enpending' : '') + '"' + (r.enPending ? ' title="这个词表里没有，英文名还带中文 —— 请在 app.js 的 EN_WORDS 里补词，或直接把变种名改掉"' : '') + '>' + esc(r.nameEn) + '</td>' +
       cols.map(lab => '<td class="l">' + esc((r.spec && r.spec[lab]) || (hasDims ? '' : r.colorSpec)) + '</td>').join('') +
       '<td><input type="number" min="1" step="1" value="' + r.pcs + '" data-pcs="' + r.sku + '" style="width:60px;text-align:right"></td>' +
       '<td><input type="checkbox" data-acc="' + r.sku + '"' + (r.accessory ? ' checked' : '') + '></td>' +
@@ -639,7 +638,7 @@ function renderRows() {
   const enPend = ROWS.filter(r => r.enPending).length;
   $('rowHint').textContent = '共 ' + ROWS.length + ' 个变种' +
     ' ｜ 规格：' + dimTxt +
-    (enPend ? ' ｜ 有 ' + enPend + ' 行英文名还带中文（词表里没收录，标黄了）：在 app.js 的 EN_WORDS 里补词，或直接在表格里改' : '') +
+    (enPend ? ' ｜ 有 ' + enPend + ' 行英文名还带中文（Variant Name 列已隐藏，导出 CSV 里能看到）：在 app.js 的 EN_WORDS 里补词' : '') +
     (trunc ? ' ｜ 规格组合太多，只保留前 ' + trunc.kept + ' 行（本来 ' + trunc.total + ' 行）' : '') +
     (noColors ? ' ｜ 没读到规格值 → 这是「单色兜底」方案，不是完整规格（该商品规格可能需要登录才可见：在抓取窗口登录一次，或退出 Chrome 后双击 import-chrome-login.cmd 导入登录态，再重读）' : '') +
     (fl.applied

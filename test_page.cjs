@@ -30,7 +30,11 @@ const rows = () => [...d.querySelectorAll('#tbody tr')];
 const cell = (r, i) => rows()[r].children[i].textContent.trim();
 // 变种名格子里现在多了一个「复制」按钮 → 取名字一律用 .vname，别拿整格 textContent 比
 const vname = (r, i = 2) => { const v = rows()[r].children[i].querySelector('.vname'); return v ? v.textContent : ''; };
-const pricesOf = () => rows().map(r => parseFloat(r.children[10].textContent));
+/* 列号一律按表头名字取（模板里删掉 Variant Name 列时，写死列号的断言集体错位过一次）
+ * th(/定价/) → 列号；tcell(行号, /成本/) → 该格文字 */
+const th = re => [...d.querySelectorAll('#thead th')].findIndex(x => re.test(x.textContent));
+const tcell = (r, re) => { const i = th(re); return i < 0 || !rows()[r] ? '' : rows()[r].children[i].textContent.trim(); };
+const pricesOf = () => { const i = th(/定价/); return rows().map(r => parseFloat((r.children[i] || {}).textContent)); };
 
 // 1) 初始状态：没抓到商品 → ④ 列表必须是空的（不许拿默认参数凭空生成任何行）
 check('初始没有商品 → 0 行（不预生成默认规格）', rows().length === 0, `${rows().length} 行`);
@@ -66,7 +70,8 @@ check('示例：店铺/品牌 chip', /远强不锈钢/.test($('prodChips').textC
 check('示例：跨境专供 chip 标红提示', /比价风险高/.test($('prodChips').textContent));
 check('示例：价格候选按钮出现', d.querySelectorAll('#pricePicker button').length >= 2,
   [...d.querySelectorAll('#pricePicker button')].map(b => b.textContent).join(' | '));
-check('示例：英文变种名无中文', rows().every(r => !/[\u4e00-\u9fa5]/.test(r.children[3].textContent)));
+check('示例：英文变种名（数据）无中文 —— 表格不显示它了，但导出要用',
+  w.eval('ROWS.every(r => !/[\\u4e00-\\u9fa5]/.test(r.nameEn || ""))'));
 
 // 3) 定价口径：与引擎一致（拿货 0.34 / 运费 10% / 还价20 / 折扣15 / 毛利33 ÷到手）
 //    注意：默认开着「低价兜底」—— 任一规格原定价 < 3 元 → 所有规格定价 +3 元
@@ -74,12 +79,12 @@ const PP = { unitCost: 0.34, accessoryCost: 1.5, freightRate: 10, bargain: 20, d
 const exp1 = V.priceVariant({ pcs: 1, accessory: false }, PP);              // 兜底前
 const exp1b = V.priceVariant({ pcs: 1, accessory: false }, PP, 3);          // 兜底后
 near('首行（单支）原定价 ≈ 0.82', exp1.price, 0.8209, 0.01);
-near('低价兜底生效：首行定价 = 原定价 + 3', parseFloat(cell(0, 10)), exp1b.price, 0.01);
-near('首行成本 = 0.34', parseFloat(cell(0, 7)), 0.34);
-near('首行运费 = 0.03（成本10%）', parseFloat(cell(0, 8)), 0.034, 0.005);
+near('低价兜底生效：首行定价 = 原定价 + 3', parseFloat(tcell(0, /定价/)), exp1b.price, 0.01);
+near('首行成本 = 0.34', parseFloat(tcell(0, /成本\u00a5|成本¥/)), 0.34);
+near('首行运费 = 0.03（成本10%）', parseFloat(tcell(0, /运费/)), 0.034, 0.005);
 check('提示区说明低价兜底已触发', /低价兜底已触发/.test($('rowHint').textContent), $('rowHint').textContent);
-near('首行毛利率按兜底后定价重算', parseFloat(cell(0, 13)) / 100, exp1b.marginOnNet, 0.001);
-check('欧元价不为空', /^€\d/.test(cell(0, 14)), cell(0, 14));
+near('首行毛利率按兜底后定价重算', parseFloat(tcell(0, /毛利率/)) / 100, exp1b.marginOnNet, 0.001);
+check('欧元价不为空', /^€\d/.test(tcell(0, /欧元价/)), tcell(0, /欧元价/));
 
 // 4) 改参数即时重算：毛利率 33 → 50
 const before = pricesOf();
@@ -113,16 +118,16 @@ near('第二行不受影响', moneyAfter[1], moneyBefore[1], 1e-9);
 const accInput = rows()[0].querySelector('input[data-acc]');
 accInput.checked = true;
 accInput.dispatchEvent(new w.Event('change', { bubbles: true }));
-check('勾选配件后该行成本变大', parseFloat(cell(0, 7)) > 3 * 0.34, cell(0, 7));
+check('勾选配件后该行成本变大', parseFloat(tcell(0, /成本/)) > 3 * 0.34, tcell(0, /成本/));
 
 // 8) 点选价格档位按钮切换拿货价
 const btns = [...d.querySelectorAll('#pricePicker button')];
 const p003 = btns.find(b => parseFloat(b.dataset.price) === 0.03);
 if (p003) {
-  const costBefore = parseFloat(cell(0, 7));
+  const costBefore = parseFloat(tcell(0, /成本/));
   p003.click();
   check('点价格档按钮后拿货价切到 0.03', $('unitCost').value === '0.03', $('unitCost').value);
-  check('切价后该行拿货成本同步变小', parseFloat(cell(0, 7)) < costBefore, `${cell(0, 7)} vs ${costBefore}`);
+  check('切价后该行拿货成本同步变小', parseFloat(tcell(0, /成本/)) < costBefore, `${tcell(0, /成本/)} vs ${costBefore}`);
 }
 
 // 8.5) 低价兜底规则：任一规格原定价 < 3 元 → 所有规格定价 +3 元（阈值/加价可改，0 = 关闭）
@@ -169,8 +174,8 @@ check('换商品后重量跟着换（211g）', $('weight').value === '211', $('w
 w.eval('PRODUCT.specs = undefined; PRODUCT.colors = [{name:"粉色",code:"C1Y1P",price:0.34},{name:"绿色",code:"C1Y1Q",price:0.34}]; onProduct(PRODUCT, "老格式测试");');
 check('老格式（只有 colors）→ 仍按规格生成行（2 个值 → 2 行）', rows().length === 2, `${rows().length} 行`);
 check('老格式 → 规格列有值、SKU 仍用页面编码',
-  rows()[0].children[4].textContent.trim() === '粉色' && /C1Y1P/.test(cell(0, 1)),
-  cell(0, 1) + ' / ' + rows()[0].children[4].textContent.trim());
+  tcell(0, /颜色|规格/) === '粉色' && /C1Y1P/.test(cell(0, 1)),
+  cell(0, 1) + ' / ' + tcell(0, /颜色|规格/));
 
 // 8.95) 组合值规格（【父】子）→ 表头/CSV 出「父规格/子规格」两列，SKU 用页面顺序 S1..
 w.eval('PRODUCT.source = {offerId:"897021596330"}; PRODUCT.specs = [{label:"功率", partLabels:["父规格","子规格"], values:[' +
@@ -179,8 +184,8 @@ w.eval('PRODUCT.source = {offerId:"897021596330"}; PRODUCT.specs = [{label:"功�
 check('组合值：表头拆成 父规格 / 子规格 两列',
   /父规格/.test($('thead').textContent) && /子规格/.test($('thead').textContent), $('thead').textContent.trim().slice(0, 70));
 check('组合值：每格是拆开的原值（不写死「颜色规格」）',
-  rows()[0].children[4].textContent.trim() === '英文版.欧规' && rows()[0].children[5].textContent.trim() === '紫色全自动32mm',
-  rows()[0].children[4].textContent.trim() + ' | ' + rows()[0].children[5].textContent.trim());
+  tcell(0, /父规格/) === '英文版.欧规' && tcell(0, /子规格/) === '紫色全自动32mm',
+  tcell(0, /父规格/) + ' | ' + tcell(0, /子规格/));
 check('组合值：SKU 用页面顺序 S1/S2 + 包装后缀', cell(0, 1) === 'YQ-6330-S1-1P' && cell(1, 1) === 'YQ-6330-S2-1P', cell(0, 1) + ',' + cell(1, 1));
 check('组合值：变种名 = 页面规格值原文（不加任何我编的尾巴）', vname(0) === '【英文版.欧规】紫色全自动32mm', vname(0));
 // 8.96) 双规格（颜色 + 尺码）：两列都要出；把「规格列上限」调到 1 时收起来并提示还有几级
@@ -192,7 +197,7 @@ check('双规格：表头同时出现 颜色 和 尺码 两列',
   /颜色/.test($('thead').textContent) && /尺码/.test($('thead').textContent), $('thead').textContent.trim().slice(0, 80));
 check('双规格：规格输入有 2 行（父规格 + 子规格）',
   $('specInputs').querySelectorAll('input[id^=spec]').length === 2, String($('specInputs').querySelectorAll('input[id^=spec]').length));
-check('双规格：每行的尺码格子来自页面值', rows()[0].children[5].textContent.trim() === '36-37适合35-36码', rows()[0].children[5].textContent.trim());
+check('双规格：每行的尺码格子来自页面值', tcell(0, /尺码/) === '36-37适合35-36码', tcell(0, /尺码/));
 check('双规格：SKU 带父+子编码', cell(0, 1) === 'YQ-2846-S1-V11-1P', cell(0, 1));
 $('maxDims').value = '1'; $('maxDims').dispatchEvent(new w.Event('change', { bubbles: true }));
 check('规格列上限=1 → 表头只剩颜色一列',
@@ -211,8 +216,8 @@ check('值里带中文逗号：仍按 2 个颜色值排（不被拆成 3 个）'
   /颜色 2 值/.test($('rowHint').textContent) && rows().length === 4,
   $('rowHint').textContent.slice(0, 60) + ' ／ ' + rows().length + ' 行');
 check('值里带中文逗号：原样显示在格子里',
-  rows().some(r => r.children[4].textContent.trim() === '【清仓随机款，尺码可指定】'),
-  [...new Set(rows().map(r => r.children[4].textContent.trim()))].join(' / '));
+  [...Array(rows().length).keys()].some(i => tcell(i, /颜色/) === '【清仓随机款，尺码可指定】'),
+  [...new Set(rows().map((_, i) => tcell(i, /颜色/)))].join(' / '));
 
 // 8.98) 成本价按各规格标价：表格里「成本¥」列各不一样（阶梯价页面的关键行为）
 // 读新商品不再重置参数了（用户要求），所以这里要自己把口径摆好：成本价＝各规格自己的标价
@@ -253,7 +258,13 @@ async function aiPageChecks() {
     /13 字/.test($('aiHintState').textContent) && /重排/.test($('aiHintState').textContent),
     $('aiHintState').textContent.slice(0, 60));
   const colOf = re => [...d.querySelectorAll('#thead th')].findIndex(th => re.test(th.textContent));
-  const enCol = colOf(/Variant Name/), priceCol = colOf(/定价/);
+  const priceCol = colOf(/定价/);
+  // 用户要求：列表里删掉 Variant Name 这一列（数据保留：CSV 导出仍然带英文名）
+  check('Variant Name 列已从表格里删掉（表头没有这一列）', colOf(/Variant Name/) === -1,
+    [...d.querySelectorAll('#thead th')].map(th => th.textContent.trim()).join('|'));
+  check('表格里不再渲染任何英文变种名',
+    !rows().some(tr => /White 3411 Horn|2 Pack/.test(tr.textContent)),
+    rows().map(tr => tr.children[2].textContent.trim()).join(' | ').slice(0, 80));
   check('表头里找得到「定价」列', priceCol > 0, '列号 ' + priceCol);
   const engRows = rows().length;
   const plan = { ok: true, model: 'deepseek-flash', elapsedSec: 4.4, note: '主推 2 件装；只上深色系', notes: ['先原规格再组合'],
@@ -274,7 +285,8 @@ async function aiPageChecks() {
     JSON.stringify(asked && asked.body.params) + ' vs 上限 ' + $('maxDims').value);
   check('请求体里没有密钥（密钥只在服务端）', !!asked && !/apiKey|sk-/.test(JSON.stringify(asked.body)));
   check('表格按 AI 的计划出 2 行（引擎本来 ' + engRows + ' 行）', rows().length === 2, rows().length + ' 行');
-  check('AI 给的英文变种名进了表', /White 3411 Horn/.test(cell(0, enCol)), cell(0, enCol));
+  check('AI 给的英文变种名仍保存在数据里（只是表格不显示）',
+    w.eval('(ROWS[0] && ROWS[0].nameEn) || ""') === 'White 3411 Horn', w.eval('(ROWS[0] && ROWS[0].nameEn) || ""'));
   check('④ 提示写明这份计划来自 DeepSeek', /DeepSeek/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 70));
   check('跳过的规格值与理由显示给用户', /随机款/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 70));
   check('中文变种名那一栏写明「几行来自 DeepSeek / 几行回落模板」（按表里真实行数）',
@@ -370,6 +382,7 @@ async function aiPageChecks() {
     check('CSV 表头含 定价(元)', /定价\(元\)/.test(lines[0]));
     check('CSV 规格列名来自规格维度（双规格 → 颜色,尺码）', /颜色,尺码/.test(lines[0]), lines[0].split(',').slice(0, 6).join(','));
     check('CSV 含 SKU 前缀 YQ-', /YQ-\d{4}/.test(lines[1]), lines[1]);
+    check('CSV 里仍然有 Variant Name 列（表格里不显示，导出照旧给）', /Variant Name/.test(lines[0]), lines[0].slice(0, 70));
   }
   await aiPageChecks();
   await browserBoxChecks();
