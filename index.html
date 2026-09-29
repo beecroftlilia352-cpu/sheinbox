@@ -177,7 +177,6 @@
   <!-- 规格 + 定价 -->
   <div class="card">
     <h2>④ 变种规格与定价 <span class="hint" id="rowHint"></span></h2>
-    <div id="specTree" style="display:none;margin:2px 0 8px;padding:6px 10px;border-left:3px solid #f59e0b;background:#fffbeb;border-radius:4px;font-size:13px;line-height:1.7"></div>
     <div class="row" style="margin-bottom:8px">
       <button id="btnRegen" class="ghost">重新生成规格</button>
       <button id="btnCsv" class="ghost">导出上架表 CSV</button>
@@ -215,7 +214,6 @@ let NO_COLORS = false;          // 解析到的颜色为空 → 现在用的是�
 let EMPTY_REASON = '';          // 列表为空时的原因（没商品 / 没价格），显示在 ④ 的提示和导出报错里
 let AUTO_COST = '';            // 上一次由「读取商品」自动填进拿货价的值：只在这个值没被你改过时才跟着新商品更新
 let AI_PLAN = null;             // DeepSeek 排的变种计划（null = 走引擎规则）；只装组合/件数/英文名，不含价格
-let AI_MAIN = '';               // 规格树第一层：主规格（全盘唯一一个，由 DeepSeek 从抓到的商品信息归纳）
 let AI_NOTE = '';               // ④ 标题旁的「变种计划来自哪」提示
 
 if (location.protocol === 'file:') $('fileBanner').classList.add('show');
@@ -435,7 +433,7 @@ function onProductInner(prod, note) {
     $('costNote').innerHTML = '';
   }
   OV = {};                                  // 新商品 → 清掉旧的行内改动
-  AI_PLAN = null; AI_MAIN = ''; AI_NOTE = '';   // 新商品 → 上一份 DeepSeek 计划作废
+  AI_PLAN = null; AI_NOTE = '';             // 新商品 → 上一份 DeepSeek 计划作废
   regen(false);
   if ($('planMode') && $('planMode').value === 'ai') aiPlanNow();   // 选了 DeepSeek 档 → 读完商品就自动排一版
 }
@@ -539,8 +537,8 @@ async function aiPlanNow() {
     const j = await r.json().catch(() => ({}));
     if (seq !== AI_SEQ) return;               // 又有更新的一次在跑/已跑完 → 这次结果作废，别覆盖别人的
     if (!j.ok) {
-      AI_PLAN = null; AI_MAIN = ''; OV = {};
-          AI_NOTE = ' ｜ 变种计划：DeepSeek 没成，已按引擎规则排';
+      AI_PLAN = null; OV = {};
+      AI_NOTE = ' ｜ 变种计划：DeepSeek 没成，已按引擎规则排';
       // 失败也要说清「为什么」：错误串里可能有多条原因（用 ／ 分隔）→ 一条一行，别挤成一坨
       const why = String(j.error || 'DeepSeek 没给出计划（原因不明）').split(' ／ ');
       $('aiBox').innerHTML = '<span style="color:#dc2626">✖ ' + esc(why[0] || 'DeepSeek 没给出计划（原因不明）') + '</span>' +
@@ -550,7 +548,7 @@ async function aiPlanNow() {
       setStatus('error', 'DeepSeek 没能给出变种计划，已回落到引擎规则：' + (j.error || ''));
       return;
     }
-    AI_PLAN = j; AI_MAIN = String(j.main || ''); OV = {};
+    AI_PLAN = j; OV = {};
     AI_NOTE = ' ｜ 变种计划：DeepSeek 排的 ' + (j.rows || []).length + ' 行（' + (j.model || 'deepseek') + '，' + (j.elapsedSec || 0) + 's）'
       + (String(j.note || '').trim() ? '，已参考补充条件' : '')
       + '；命名：中文 ' + ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : (j.rows || []).length) + '/' + (j.rows || []).length + ' 行来自 DeepSeek'
@@ -560,8 +558,8 @@ async function aiPlanNow() {
     $('aiBox').innerHTML = aiBoxHtml(j);        // 得等表格出来，才能按表里真实的行数说清命名来源
     setStatus('ready', 'DeepSeek 排好了：' + (j.rows || []).length + ' 行变种（价格与成本仍是本地引擎算的）。');
   } catch (e) {
-    AI_PLAN = null; AI_MAIN = ''; OV = {};
-          AI_NOTE = ' ｜ 变种计划：DeepSeek 调用失败，已按引擎规则排';
+    AI_PLAN = null; OV = {};
+    AI_NOTE = ' ｜ 变种计划：DeepSeek 调用失败，已按引擎规则排';
     if (seq === AI_SEQ) {
       $('aiBox').innerHTML = '<span style="color:#dc2626">✖ 调用失败：' + esc(e.message) + '</span>';
       regen(true);
@@ -587,35 +585,9 @@ function colList(dims) {
 }
 /* 表头按规格维度动态生成（父规格/子规格各一列，标签来自页面数据） */
 function renderHead(cols) {
-  $('thead').innerHTML = '<tr><th class="l">#</th><th class="l">SKU</th><th class="l">变种名</th><th class="l">子规格(归纳)</th><th class="l">孙规格(归纳)</th>' +
+  $('thead').innerHTML = '<tr><th class="l">#</th><th class="l">SKU</th><th class="l">变种名</th>' +
     cols.map(l => '<th class="l">' + esc(l) + '</th>').join('') +
     '<th>件数</th><th>配件</th><th>成本¥</th><th>运费¥</th><th>总成本¥</th><th>定价¥</th><th>到手¥</th><th>单件利润¥</th><th>毛利率</th><th>欧元价</th><th>€凑整</th></tr>';
-}
-
-/* 规格树：主规格（唯一）→ 子规格（各行归纳出来的组）→ 孙规格（组里的行归纳名）。
- * 有 DeepSeek 计划时才显示（引擎档没有归纳这一步，就不硬编一个出来）。 */
-function renderSpecTree() {
-  const box = $('specTree');
-  if (!box) return;
-  const groups = []; const cnt = new Map(); const leafy = new Map();
-  ROWS.forEach(r => {
-    const g = r.ai ? String(r.kind || '') : '';
-    if (!g) return;
-    if (!cnt.has(g)) { cnt.set(g, 0); groups.push(g); leafy.set(g, []); }
-    cnt.set(g, cnt.get(g) + 1);
-    const lf = String(r.leaf || '');
-    if (lf && leafy.get(g).indexOf(lf) < 0) leafy.get(g).push(lf);
-  });
-  if (!groups.length && !AI_MAIN) { box.style.display = 'none'; box.innerHTML = ''; return; }
-  box.style.display = 'block';
-  const dim = 'color:#9ca3af';
-  box.innerHTML = '<b>主规格</b>&nbsp;' + esc(AI_MAIN || '—') +
-    (groups.length ? ' <span style="' + dim + '">→</span> ' + groups.map(g => {
-      const lf = leafy.get(g) || [];
-      const shown = lf.join(' · ');          // 全显示：孙规格是模型按数据归纳的，页面上不许自作主张只给前几个
-      return '<b>' + esc(g) + '</b> <span style="' + dim + '">(' + cnt.get(g) + ' 行)</span>' +
-        (shown ? ' <span style="' + dim + '">→</span> ' + esc(shown) : '');
-    }).join(' <span style="' + dim + '">｜</span> ') : '');
 }
 
 function renderRows() {
@@ -625,7 +597,6 @@ function renderRows() {
   const cols = colList(dims);
   const hasDims = dims.length > 0;
   renderHead(cols);
-  renderSpecTree();
   const empty = !ROWS.length;
   $('emptyBox').style.display = empty ? 'block' : 'none';
   if (empty) {                                  // 空态：一行都不渲染，也不显示任何算出来的数
@@ -646,8 +617,6 @@ function renderRows() {
       '<td class="l"><span class="vname">' + esc(r.nameCn) + '</span>' +
         ((r.ai && r.kind) ? ' <span class="pn">' + esc(r.kind) + '</span>' : '') +
         '<button class="copy" data-copy="' + esc(r.nameCn) + '" title="复制这个变种名">复制</button></td>' +
-      '<td class="l">' + esc(r.ai ? (r.kind || '') : '') + '</td>' +
-      '<td class="l">' + esc(r.ai ? (r.leaf || '') : '') + '</td>' +
       cols.map(lab => '<td class="l">' + esc((r.spec && r.spec[lab]) || (hasDims ? '' : r.colorSpec)) + '</td>').join('') +
       '<td><input type="number" min="1" step="1" value="' + r.pcs + '" data-pcs="' + r.sku + '" style="width:60px;text-align:right"></td>' +
       '<td><input type="checkbox" data-acc="' + r.sku + '"' + (r.accessory ? ' checked' : '') + '></td>' +
@@ -819,13 +788,13 @@ $('btnCsv').onclick = () => {
   if (!ROWS.length) { setStatus('error', '还没有规格可导出：' + (EMPTY_REASON || '先读取商品链接')); return; }
   const dims = shownDimsOf(PRODUCT);
   const cols = colList(dims);
-  const head = ['SKU','变种名','Variant Name','主规格','子规格','孙规格'].concat(cols)
+  const head = ['SKU','变种名','Variant Name'].concat(cols)
     .concat(['件数','配件','拿货成本(元)','运费(元)','总成本(元)','定价(元)','到手价(元)','单件利润(元)','毛利率','欧元价','欧元凑整价','低价兜底(元)']);
   const lines = [head.join(',')];
   ROWS.forEach(r => {
     const p = r.pricing;
     const specVals = cols.map(lab => (r.spec && r.spec[lab]) || (dims.length ? '' : r.colorSpec));
-    lines.push([r.sku, r.nameCn, r.nameEn, AI_MAIN, r.kind || '', r.leaf || ''].concat(specVals).concat([r.pcs, r.accessory ? '含配件' : '无',
+    lines.push([r.sku, r.nameCn, r.nameEn].concat(specVals).concat([r.pcs, r.accessory ? '含配件' : '无',
       f2(p.goods), f2(p.freight), f2(p.totalCost), f2(p.price), f2(p.net), f2(p.unitProfit),
       (p.marginOnNet * 100).toFixed(1) + '%', '€' + f2(p.priceEur), '€' + f2(p.priceEur99),
       f2(p.priceBoost || 0)])
@@ -875,7 +844,7 @@ if ($('aiHint')) {
 
 $('planMode').addEventListener('change', () => {
   if ($('planMode').value === 'ai') { if (PRODUCT) aiPlanNow(); else setStatus('error', '还没有商品：先「读取商品」，再让 DeepSeek 排变种。'); return; }
-  AI_PLAN = null; AI_MAIN = ''; AI_NOTE = ' ｜ 变种计划：引擎规则'; $('aiBox').innerHTML = ''; OV = {}; regen(true);
+  AI_PLAN = null; AI_NOTE = ' ｜ 变种计划：引擎规则'; $('aiBox').innerHTML = ''; OV = {}; regen(true);
 });
 $('btnFetch').onclick = startFetch;
 if (location.protocol !== 'file:') browserInfo();      // 打开页面就把抓取浏览器状态摆出来

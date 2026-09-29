@@ -280,7 +280,7 @@
           nameCn, nameEn,
           spec: specOfValues(vals, dims, combo),
           colorSpec: cnVals.map(v => v.name).join('/'),
-          pcs, accessory: !!r.accessory, kind: String(r.kind || ''), leaf: String(r.leaf || ''), ai: true, aiCn: !!cnUse
+          pcs, accessory: !!r.accessory, kind: String(r.kind || ''), ai: true, aiCn: !!cnUse
         }, !r.accessory && pcs === bq, vals);      // 单位件、不带配件的行 = 真实规格行，排前面（封顶时不会先被丢）
       });
     } else combos.forEach(combo => {
