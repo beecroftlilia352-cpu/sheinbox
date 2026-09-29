@@ -144,6 +144,47 @@
     if (/[。；;]$/.test(t)) return false;                       // 句子
     return true;
   }
+  /* 材质：页面上是「鞋底材质 / 鞋面材质 / 内里材质 / 主面料成分…」这类属性行。两种排版都见过：
+   *   a) 属性表（标签行带 \t）    → 值在下一行（最可靠，优先）
+   *   b) 详情区的纯文本行          → 值可能在上、也可能在下（各页不一，当兜底）
+   * 同名标签以 (a) 为准；值必须短、不含顿号/逗号（那种是「功能」之类别的属性的值），也不能又是一个材质标签。 */
+  const MAT_LABEL_RE = /^[\u4e00-\u9fa5A-Za-z]{0,6}(?:材质|面料|成分|里料|帮面)$/;   // 前缀 0 个字也对：「材质」单独一行很常见
+  const MAT_NOISE_RE = /[、,，;；|]|\d{3,}|cm|CM|克\/|功能|款式|颜色|尺码|属性/;
+  function pickMaterials(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    const isLabel = s => MAT_LABEL_RE.test(String(s || '').trim());   // 「材质」单独一行也算（很多页面就这么写），长句里的不算
+    const okValue = s => {
+      const v = String(s == null ? '' : s).trim();
+      if (!v || v.length > 14) return '';
+      if (isLabel(v)) return '';
+      if (MAT_NOISE_RE.test(v)) return '';
+      if (!/[A-Za-z0-9\u4e00-\u9fa5]/.test(v)) return '';   // 纯标点/空白不是值（注意：JS 的 \W 不认汉字，不能用它判断）
+      return v;
+    };
+    const tab = new Map(), bare = new Map();              // 带制表符的可靠；纯文本行的兜底
+    lines.forEach((raw, i) => {
+      const L = raw.trim();
+      if (!isLabel(L)) return;
+      const hasTab = /\t/.test(raw);
+      const cells = raw.split('\t').map(t => t.trim()).filter(Boolean);
+      /* 两种排版各自一致（两个夹具都对得上）：
+       *   属性表（带 \t）：标签行 → 值在下一行；
+       *   纯文本行        ：值在上一行、标签在下（「EVA \n 鞋底材质」）。 */
+      let v = cells.length > 1 ? okValue(cells[cells.length - 1]) : '';   // 值和标签同一行
+      if (!v) v = hasTab ? okValue(lines[i + 1]) : okValue(lines[i - 1]);
+      if (!v) v = hasTab ? okValue(lines[i - 1]) : okValue(lines[i + 1]); // 兜底：换另一侧再试
+      if (!v) return;
+      (hasTab ? tab : bare).set(L, v);
+    });
+    const out = [], seen = new Set();
+    [...tab.keys(), ...bare.keys()].forEach(k => {        // 制表符版优先
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push({ label: k, value: tab.has(k) ? tab.get(k) : bare.get(k) });
+    });
+    return out.slice(0, 4);
+  }
+
   function labelBefore(lines, i) {
     for (let k = i - 1; k >= 0 && k >= i - 6; k--) {
       const t = (lines[k] || '').replace(/^#{1,6}\s*/, '').replace(/[|\s]+/g, ' ').trim();
@@ -546,6 +587,7 @@
         /重量\s*\(?g\)?[^\\d\n]{0,20}(\d{1,5})\s*(?:g|克)/i,
         /重量[^\d]{0,20}(\d+)\s*g/i]) ?? tabWeight,
       box_qty: pickNumber(text, [/箱装数量\s*\|?\s*(\d+)/, /参考装箱数[^\d]{0,20}(\d+)/, /(\d+)\s*个\s*\/?\s*箱/]),
+      material: pickMaterials(text),                    // 商品材质（鞋底材质/鞋面材质/主面料成分…），逐字来自页面
       bladeCount: pickNumber(text, [/剃须刀刀片\s*\|?\s*(\d+)/]),
       isImported: /是否进口\s*\|?\s*是/.test(text) ? true : (/是否进口\s*\|?\s*否/.test(text) ? false : null),
       crossBorderOnly: /是否跨境出口专供货源\s*\|?\s*是/.test(text) ? true : (/是否跨境出口专供货源\s*\|?\s*否/.test(text) ? false : null),

@@ -170,6 +170,14 @@ check('换商品后只剩这一个规格值 → 1 行', rows().length === 1, `${
 check('换商品后表头提示写明「单色兜底」', /单色兜底/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 60));
 check('换商品后重量跟着换（211g）', $('weight').value === '211', $('weight').value);
 
+// 8.92) 商品信息模块新增「商品材质」：材质来自解析结果，逐字显示，不许改写
+w.eval('PRODUCT.material = [{label:"鞋底材质",value:"EVA"},{label:"鞋面材质",value:"人造毛绒"}]; onProduct(PRODUCT, "材质测试");');
+check('① 商品信息里出「材质」并逐字显示页面上的值',
+  /材质/.test($('prodChips').textContent) && /鞋底材质 EVA/.test($('prodChips').textContent) && /鞋面材质 人造毛绒/.test($('prodChips').textContent),
+  ($('prodChips').textContent.match(/材质[^|]{0,40}/) || [''])[0].trim());
+w.eval('PRODUCT.material = []; onProduct(PRODUCT, "材质为空");');
+check('材质没读到 → 不显示这一项（不编）', !/材质/.test($('prodChips').textContent), ($('prodChips').textContent.match(/材质[^|]{0,30}/) || ['(没有)'])[0].trim());
+
 // 8.9) 兼容老格式/老缓存：解析结果只有 colors、没有 specs 维度时也必须照常出规格行
 w.eval('PRODUCT.specs = undefined; PRODUCT.colors = [{name:"粉色",code:"C1Y1P",price:0.34},{name:"绿色",code:"C1Y1Q",price:0.34}]; onProduct(PRODUCT, "老格式测试");');
 check('老格式（只有 colors）→ 仍按规格生成行（2 个值 → 2 行）', rows().length === 2, `${rows().length} 行`);

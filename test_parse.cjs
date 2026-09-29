@@ -149,6 +149,25 @@ check('已售罄：页面没写库存的值照旧保留（不猜）',
 const aoProd = P.parse(baseFx.replace(/库存\d+个/g, '库存0个'), { url: 'https://detail.1688.com/offer/897021596330.html' });
 eq('已售罄：整维都售罄 → 不列这一维', (aoProd.specs || []).length, 0);
 
+/* 商品材质：两种排版都要读对（属性表带制表符；详情区是「值在上、标签在下」），SEO 长句里的不算 */
+const mt1 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1081733292371.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/1081733292371.html' });
+const mt1s = (mt1.material || []).map(x => x.label + '=' + x.value);
+check('材质：拖鞋页读到 鞋底/鞋面/内里/鞋垫 四项',
+  mt1s.includes('鞋底材质=EVA') && mt1s.includes('鞋面材质=人造毛绒') && mt1s.includes('内里材质=人造短毛绒'),
+  mt1s.join(' ｜ '));
+const mt2 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1002135913894.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/1002135913894.html' });
+const mt2s = (mt2.material || []).map(x => x.label + '=' + x.value);
+check('材质：另一双拖鞋 鞋面材质=皮毛一体（不是隔壁那行的值）', mt2s.includes('鞋面材质=皮毛一体'), mt2s.join(' ｜ '));
+const mt3 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-922794624735.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/922794624735.html' });
+const mt3s = (mt3.material || []).map(x => x.label + '=' + x.value);
+check('材质：「材质」单独成行也认（地板 → 材质=木塑）', mt3s.includes('材质=木塑'), mt3s.join(' ｜ '));
+const mt4 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-778887421078.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/778887421078.html' });
+check('材质：只有 SEO 长句里出现「材质」→ 不算（不许编）', (mt4.material || []).length === 0, JSON.stringify(mt4.material));
+
 /* 规格组合价（页面内嵌 skuInfoMap）：正文里只有默认组合的价，必须靠它才能算出「每个规格不一样」的价 */
 const fx108 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1081733292371.txt'), 'utf8');
 const SEP = '\u0000';

@@ -370,6 +370,7 @@ function onProductInner(prod, note) {
   const chip = (k, v, cls) => { if (v !== null && v !== undefined && v !== '') chips.push('<span class="chip ' + (cls||'') + '"><b>' + k + '</b> ' + v + '</span>'); };
   chip('店铺', prod.shop); chip('品牌', prod.brand); chip('类别', prod.category);
   chip('单件重量', prod.weight_g ? prod.weight_g + ' g' : null);
+  chip('材质', (prod.material || []).map(m => (m.value ? m.label + ' ' + m.value : m.label)).join(' · '));
   chip('箱装', prod.box_qty ? prod.box_qty + ' 个' : null);
   chip('跨境专供', prod.crossBorderOnly === true ? '是' : prod.crossBorderOnly === false ? '否（比价风险高）' : null,
        prod.crossBorderOnly === false ? 'warn' : '');
