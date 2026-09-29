@@ -177,6 +177,13 @@ check('① 商品信息里出「材质」并逐字显示页面上的值',
   ($('prodChips').textContent.match(/材质[^|]{0,40}/) || [''])[0].trim());
 w.eval('PRODUCT.material = []; onProduct(PRODUCT, "材质为空");');
 check('材质没读到 → 不显示这一项（不编）', !/材质/.test($('prodChips').textContent), ($('prodChips').textContent.match(/材质[^|]{0,30}/) || ['(没有)'])[0].trim());
+// 8.93) 商品信息模块新增「尺寸」：件重尺表区间 + 属性行原文
+w.eval('PRODUCT.size = {l:"27.5–32", w:"24.5–27", h:"9–14", volume:"6063.75–12096", text:"7*7.5"}; onProduct(PRODUCT, "尺寸测试");');
+check('① 商品信息里出「尺寸」并带单位/区间/页面原文',
+  /尺寸/.test($('prodChips').textContent) && /长 27.5–32 · 宽 24.5–27 · 高 9–14 cm/.test($('prodChips').textContent) && /页面标 7\*7\.5/.test($('prodChips').textContent),
+  ($('prodChips').textContent.match(/尺寸[^|]{0,60}/) || [''])[0].trim());
+w.eval('PRODUCT.size = null; onProduct(PRODUCT, "尺寸为空");');
+check('尺寸没读到 → 不显示这一项（不编）', !/尺寸/.test($('prodChips').textContent), ($('prodChips').textContent.match(/尺寸[^|]{0,20}/) || ['(没有)'])[0].trim());
 
 // 8.9) 兼容老格式/老缓存：解析结果只有 colors、没有 specs 维度时也必须照常出规格行
 w.eval('PRODUCT.specs = undefined; PRODUCT.colors = [{name:"粉色",code:"C1Y1P",price:0.34},{name:"绿色",code:"C1Y1Q",price:0.34}]; onProduct(PRODUCT, "老格式测试");');

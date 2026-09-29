@@ -144,6 +144,55 @@
     if (/[。；;]$/.test(t)) return false;                       // 句子
     return true;
   }
+  /* 尺寸：两个来源都读，逐字/逐数来自页面：
+   *   ① 件重尺表（表头含「长(cm) 宽(cm) 高(cm)」，数值在下一行；有的表前面还有颜色/尺码两列）——
+   *      按表头列名定位，逐行取值；多行规格不同 → 取 min~max 区间（如实反映「按规格不同」）。
+   *   ② 属性行「尺寸 / 商品尺寸 / 规格尺寸 → 值」（如 7*7.5），逐字保留。 */
+  function pickSize(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    let table = null, text_ = '';
+    for (let i = 0; i < lines.length && !table; i++) {
+      const head = lines[i];
+      if (!/长\s*\(cm\)/.test(head) || !/宽\s*\(cm\)/.test(head) || !/\t/.test(head)) continue;
+      const cols = head.split('\t').map(s => s.trim());
+      const at = k => cols.findIndex(c => c.indexOf(k) >= 0);
+      const ix = { l: at('长'), w: at('宽'), h: at('高'), v: at('体积'), g: at('重量') };
+      const rows = [];
+      for (let j = i + 1; j < lines.length && j <= i + 60; j++) {
+        const raw = lines[j];
+        if (!raw.trim()) { if (rows.length) break; continue; }
+        if (/\(cm\)/.test(raw)) break;                       // 下一张表
+        const cells = raw.split('\t').map(s => s.trim());
+        const num = k => (ix[k] >= 0 && cells[ix[k]] != null && /^-?\d+(?:\.\d+)?$/.test(cells[ix[k]])) ? Number(cells[ix[k]]) : null;
+        const l = num('l'), w = num('w'), h = num('h');
+        if (l == null && w == null) { if (rows.length) break; continue; }
+        rows.push({ l, w, h, v: num('v'), g: num('g') });
+        if (rows.length >= 60) break;
+      }
+      if (rows.length) table = rows;
+    }
+    const bend = (k) => {
+      const vals = (table || []).map(r => r[k]).filter(n => n != null);
+      if (!vals.length) return null;
+      const lo = Math.min(...vals), hi = Math.max(...vals);
+      const f = n => (Math.round(n * 1000) / 1000).toString();
+      return lo === hi ? f(lo) : f(lo) + '–' + f(hi);
+    };
+    /* 属性行「尺寸」：标签行（可带 \t）→ 值在下一行 */
+    for (let i = 0; i < lines.length && !text_; i++) {
+      const L = lines[i].trim();
+      if (!/^(?:商品|规格|产品|外形|包装)?尺寸(?:（[^）]{1,6}）)?$/.test(L)) continue;
+      const cand = (lines[i + 1] || '').trim();
+      if (!cand || cand.length > 20) continue;
+      if (/^[\d.]+\s*[*×xX]/.test(cand) || /^(?:长|宽|高)/.test(cand)) text_ = cand;   // 形如 7*7.5 / 30cm*30cm
+    }
+    const out = {};
+    const l = bend('l'), w = bend('w'), h = bend('h'), v = bend('v');
+    if (l != null || w != null || h != null) { out.l = l; out.w = w; out.h = h; if (v != null) out.volume = v; }
+    if (text_) out.text = text_;
+    return (out.l != null || out.text) ? out : null;
+  }
+
   /* 材质：页面上是「鞋底材质 / 鞋面材质 / 内里材质 / 主面料成分…」这类属性行。两种排版都见过：
    *   a) 属性表（标签行带 \t）    → 值在下一行（最可靠，优先）
    *   b) 详情区的纯文本行          → 值可能在上、也可能在下（各页不一，当兜底）
@@ -588,6 +637,7 @@
         /重量[^\d]{0,20}(\d+)\s*g/i]) ?? tabWeight,
       box_qty: pickNumber(text, [/箱装数量\s*\|?\s*(\d+)/, /参考装箱数[^\d]{0,20}(\d+)/, /(\d+)\s*个\s*\/?\s*箱/]),
       material: pickMaterials(text),                    // 商品材质（鞋底材质/鞋面材质/主面料成分…），逐字来自页面
+      size: pickSize(text),                             // 尺寸（件重尺表的长/宽/高 + 属性行「尺寸」原文）
       bladeCount: pickNumber(text, [/剃须刀刀片\s*\|?\s*(\d+)/]),
       isImported: /是否进口\s*\|?\s*是/.test(text) ? true : (/是否进口\s*\|?\s*否/.test(text) ? false : null),
       crossBorderOnly: /是否跨境出口专供货源\s*\|?\s*是/.test(text) ? true : (/是否跨境出口专供货源\s*\|?\s*否/.test(text) ? false : null),

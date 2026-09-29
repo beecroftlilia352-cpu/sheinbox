@@ -149,6 +149,20 @@ check('已售罄：页面没写库存的值照旧保留（不猜）',
 const aoProd = P.parse(baseFx.replace(/库存\d+个/g, '库存0个'), { url: 'https://detail.1688.com/offer/897021596330.html' });
 eq('已售罄：整维都售罄 → 不列这一维', (aoProd.specs || []).length, 0);
 
+/* 尺寸信息：件重尺表（按表头列名定位，多规格 → 区间）+ 属性行「尺寸」原文 */
+const sz1 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1002135913894.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/1002135913894.html' }).size || {};
+check('尺寸：件重尺表读出长宽高（多规格 → 区间）',
+  sz1.l === '27.5–32' && sz1.w === '24.5–27' && sz1.h === '9–14',
+  JSON.stringify(sz1));
+const sz2 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-778887421078.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/778887421078.html' }).size || {};
+check('尺寸：没有颜色/尺码前置列的表也读对（8/7/2）', sz2.l === '8' && sz2.w === '7' && sz2.h === '2' && sz2.volume === '112', JSON.stringify(sz2));
+check('尺寸：属性行的「尺寸」原文也带上（7*7.5）', sz2.text === '7*7.5', JSON.stringify(sz2.text));
+const sz3 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1081733292371.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/1081733292371.html' }).size;
+check('尺寸：页面上没有尺寸信息 → 不给（不编）', sz3 === null, JSON.stringify(sz3));
+
 /* 商品材质：两种排版都要读对（属性表带制表符；详情区是「值在上、标签在下」），SEO 长句里的不算 */
 const mt1 = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1081733292371.txt'), 'utf8'),
   { url: 'https://detail.1688.com/offer/1081733292371.html' });
