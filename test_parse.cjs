@@ -130,6 +130,21 @@ eq('拼接地板：10片装那个值自己带 23 的标价', ((pd.specs[0].value
 eq('拼接地板：推荐位里别的商品的价格不许进档位（¥35 是别人的）', (pd.priceTiers || []).every(t => t.price !== 35), true);
 eq('拼接地板：拿货价 = 2.12（单件出货成本）', pd.suggestedUnitCost, 2.12);
 
+// ── 第六个页面：纯数字尺码（36~45）+ 标签被备注粘住（「尺码按包起批，每包5双」）+ 件重尺表头没有长(cm) ──
+const sp = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-791436406391.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/791436406391.html' });
+eq('除臭鞋垫：读到 2 个规格维度（颜色 + 尺码）', sp.specs.map(d => d.label), ['颜色', '尺码']);
+eq('除臭鞋垫：颜色 8 值', sp.specs[0].values.length, 8);
+eq('除臭鞋垫：尺码 10 值且是纯数字 36~45（旧逻辑「纯数字不是规格值」会让整单 0 维度）',
+  sp.specs[1].values.map(v => v.name), ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45']);
+eq('除臭鞋垫：尺码值带标价 0.3 与库存', [sp.specs[1].values[0].price, sp.specs[1].values[9].stock], [0.3, 96929]);
+eq('除臭鞋垫：重量 20（表头没有长(cm)，靠「件重尺」路标 + 重量(g) 列读）', sp.weight_g, 20);
+eq('除臭鞋垫：colors 兼容字段 = 颜色维 8 值', sp.colors.length, 8);
+// 纯数字尺码的最小复现（不依赖整页）
+const dg = P.parse('颜色\n红色\n蓝色\n尺码\n36\n¥0.3\n库存10件\n37\n¥0.3\n库存20件\n', { url: null });
+eq('纯数字尺码（36/37）能当规格值，且不并进颜色维', dg.specs.map(d => d.label), ['颜色', '尺码']);
+eq('纯数字尺码：值名与价都在', dg.specs[1].values.map(v => v.name + '/' + v.price), ['36/0.3', '37/0.3']);
+
 /* 已售罄的规格值不抓取（用户要求）：库存 0 / 名字里写着售罄的，都不进规格；
  * 库存数据本身没有的（页面没写）必须保留 —— 不猜。 */
 // 直接改真实 fixture（卷发棒 897021596330，功率 9 个值）：把第 1 个值改成库存 0、

@@ -140,7 +140,7 @@
     if (/[¥￥]|库存|已售|销量/.test(t)) return false;
     if (/^!\[/.test(t) || VALUE_SEP.test(t)) return false;
     if (LABEL_WORD.test(t) || UI_VALUE.test(t)) return false;
-    if (/^[\d.\s]+$/.test(t)) return false;                     // 纯数字
+    if (/^[\d.\s]+$/.test(t) && !/^[1-9]\d{0,2}(\.\d)?$/.test(t)) return false;   // 纯数字：像尺码（36/45/36.5）才当值
     if (/[。；;]$/.test(t)) return false;                       // 句子
     return true;
   }
@@ -240,8 +240,12 @@
       if (!t) continue;
       if (/^!\[/.test(t) || /^[-—=*_]+$/.test(t)) continue;      // 图片行、分隔线
       if (/[¥￥]|库存/.test(t)) break;                             // 撞到上一个值的价格行 → 这组没有独立标签
-      if (t.length > 8 || NOISE_LABEL.test(t)) return null;
-      return t;
+      if (t.length <= 8 && !NOISE_LABEL.test(t)) return t;
+      // 标签行有时被备注粘住：「尺码按包起批，每包5双」「颜色分类 8 种可选」——
+      // 取开头的维度词当标签（限 20 字内，免得长句被误判成标签）。不这么干，尺寸值会并进颜色维度。
+      const pref = t.match(/^(颜色|色彩|色系|尺码|尺寸|鞋码|规格|型号|款式|版本|容量|功率|套餐|口味|净含量|重量|长度|宽度|高度|直径)/);
+      if (pref && t.length <= 20) return pref[1];
+      return null;
     }
     return null;
   }
@@ -263,8 +267,20 @@
     let hdr = -1, cols = [];
     for (let i = 0; i < lines.length; i++) {
       const cells = lines[i].split('\t').map(s => s.trim());
-      const cut = cells.findIndex(c => /^长\s*\(cm\)$/i.test(c));
-      if (cut > 0 && cells.length >= cut + 2) { hdr = i; cols = cells.slice(0, cut); break; }
+      let cut = cells.findIndex(c => /^长\s*\(cm\)$/i.test(c));
+      let minCells = cut + 2;
+      if (cut < 0) {
+        // 有些商品（如鞋垫）的表头是「颜色 尺码 重量(g)」——没有长(cm)列，整张表会被跳过（重量也丢）。
+        // 兜底必须窄：① 表头上方有「件重尺」路标；② 表头里没有任何测量列（长/宽/高/体积/尺寸）。
+        // 长(cm) 排在第一个（cut==0）的表是「前面没有规格列」的尺寸表，原逻辑本来就跳过，别接回来。
+        const near = lines.slice(Math.max(0, i - 5), i).join(' ');
+        const hasMeasureCol = cells.some(c => /^(长|宽|高|体积|尺寸)\s*[（(]/.test(c));
+        if (/件重尺/.test(near) && !hasMeasureCol) {
+          cut = cells.findIndex(c => /^(重量|重)\s*(\(g\))?$/i.test(c));
+          minCells = cut + 1;
+        }
+      }
+      if (cut > 0 && cells.length >= minCells) { hdr = i; cols = cells.slice(0, cut); break; }
     }
     if (hdr < 0 || !cols.length) return null;
     const seen = cols.map(() => new Set()), vals = cols.map(() => []);
@@ -357,7 +373,10 @@
         // 「36/37（标准尺码）」—— 一扔就是「每个尺码都读不到 → 整单退化成单色兜底」。
         if (/[¥￥、，,。；;：:]/.test(name)) continue;
         if (/已售|运费|包邮|登录|选择|说明/.test(name)) continue;
-        if (/^[\d.]+$/.test(name)) continue;                      // 纯数字不是规格值
+        // 纯数字的规格值是真实存在的（尺码 36~45、码数 6/7/8、半码 36.5）——「纯数字一律不是规格值」
+        // 会把整单的规格丢空（791436406391 报障：尺码 36~45 全是数字 → 0 个规格维度）。
+        // 只挡「不像规格值的数字」：0 开头 / 小数点开头（价格拆分残留，如 0.3、.10）、超过 3 位（如 89602）。
+        if (/^[\d.]+$/.test(name) && !/^[1-9]\d{0,2}(\.\d)?$/.test(name)) continue;
         if (valuePair.some(c => (code ? c.code === code : c.name === name))) continue;
         const at = m.index + m[0].indexOf(m[1]);
         valuePair.push({ name, code, stock, price, parts: splitParts(name), pos: at, label: labelBefore(lines, lineOf(at)) });
