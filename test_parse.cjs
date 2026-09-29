@@ -145,6 +145,26 @@ const dg = P.parse('颜色\n红色\n蓝色\n尺码\n36\n¥0.3\n库存10件\n37\n
 eq('纯数字尺码（36/37）能当规格值，且不并进颜色维', dg.specs.map(d => d.label), ['颜色', '尺码']);
 eq('纯数字尺码：值名与价都在', dg.specs[1].values.map(v => v.name + '/' + v.price), ['36/0.3', '37/0.3']);
 
+// ── 第八个页面：长尺码名带「，」+ 定制加价项（+¥0.2/0.3…）+ 主价旁就是「已售/对比」——整单价格曾被读错成 0.20 ──
+const yx = P.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1070076236814.txt'), 'utf8'),
+  { url: 'https://detail.1688.com/offer/1070076236814.html' });
+eq('雨鞋套：维度 = 颜色 + 规格（顺序不颠倒）', yx.specs.map(d => d.label), ['颜色', '规格']);
+eq('雨鞋套：颜色 4 值 / 规格 4 值（「靴子拍大两码」不许被劈成独立规格值）',
+  [yx.specs[0].values.length, yx.specs[1].values.length], [4, 4]);
+eq('雨鞋套：尺码值 = 整段原文（含「，靴子拍大两码」）', yx.specs[1].values[0].name,
+  'M【适合尺码37-38】运动鞋/厚底鞋建议拍大一码，靴子拍大两码');
+eq('雨鞋套：没有「靴子拍大两码」这种被劈出来的假值',
+  yx.specs[1].values.every(v => v.name !== '靴子拍大两码'), true);
+eq('雨鞋套：尺码带标价 12.8 与库存（之前全 null → 表里成本错成 0.20）',
+  [yx.specs[1].values[0].price, yx.specs[1].values.map(v => v.stock)], [12.8, [3779, 2401, 632, 1195]]);
+eq('雨鞋套：规格标价 = 12.8', yx.specPrice, 12.8);
+eq('雨鞋套：拿货价默认 = 12.8', yx.suggestedUnitCost, 12.8);
+eq('雨鞋套：定制加价项（+¥0.2/0.3/0.4…）不许进价格档位', (yx.priceTiers || []).some(t => t.price < 5), false);
+eq('雨鞋套：档位里只有真价 12.8（推荐区 6.00/6.21/14.1… 全在规格块之后，已被 zone 切掉）',
+  (yx.priceTiers || []).map(t => t.price), [12.8]);
+eq('雨鞋套：件重尺表重量 350g', yx.weight_g, 350);
+eq('雨鞋套：主价旁有「已售/对比」也要能读到（NOISE 窗口不许误杀主价）', (yx.priceTiers || []).length > 0, true);
+
 /* 已售罄的规格值不抓取（用户要求）：库存 0 / 名字里写着售罄的，都不进规格；
  * 库存数据本身没有的（页面没写）必须保留 —— 不猜。 */
 // 直接改真实 fixture（卷发棒 897021596330，功率 9 个值）：把第 1 个值改成库存 0、

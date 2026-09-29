@@ -11,7 +11,10 @@
   // 导航/法务/推荐位噪声：出现这些词的候选标题一律不要
   const NAV = /阿里|备案|许可证|价格说明|优惠|平台活动|侵权|举报|声明|登录|规格|库存|运费|协议|隐私|服务条款|热线|客服|导航|热门推荐|已售|反馈|插件/;
   // 推荐位的价格（"¥1.04已售8万+个"）不是本商品价格
-  const NOISE_AROUND = /已售|offer\/\d+|热门推荐|猜你喜欢|同款|推荐|对比/;
+  // 注：「已售」「对比」从这里拿掉了 —— 主价格面板紧挨着就有「已售2900+套」和「对比」按钮，
+  // 放进去会把本店主价一起误杀（1070076236814 报障：价格档位整段丢空 → 成本错成兜底价 0.20）。
+  // 推荐卡的「¥x.xx 售 N万+件」由 after25 的「已售|售」精确规则 + zone（规格块后的推荐区分界）兜住。
+  const NOISE_AROUND = /offer\/\d+|热门推荐|猜你喜欢|同款|推荐/;
 
   function stripTags(s) {
     return s.replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -80,8 +83,11 @@
       const after25 = t.slice(m.index + m[0].length, m.index + m[0].length + 25).replace(/\s+/g, ' ').trim();
       if (NOISE_AROUND.test(near35)) continue;             // 推荐位/其他商品的价格（窗口收紧，别把本商品面板误杀）
       if (/^(已售|售)[\s|]*[\d一二三四五六七八九十]/.test(after25)) continue;   // 推荐卡片的「¥4.50 售 1万+件」（数字也常被拆行 → 允许分隔符）
-      const pre = t.slice(Math.max(0, m.index - 14), m.index);
+      let pre = t.slice(Math.max(0, m.index - 14), m.index);
+      const cutY = Math.max(pre.lastIndexOf('¥'), pre.lastIndexOf('￥'));
+      if (cutY >= 0) pre = pre.slice(cutY + 1);             // 窗口里撞到上一个价格就截住：别把别的价格的「预估/老客价」带进这个价
       if (/运费|邮费|包邮/.test(pre)) continue;            // 运费不是货价
+      if (/\+[ \t]*$/.test(pre)) continue;                 // 「+¥0.3」是定制/包装的加价项，不是价格档位
       // 「新人价 / 首件预估到手价 / 60天老客价」是促销估算，不是拿货价（只看紧挨着价格的那几个字，别把上一个价格的关键词带进来）
       if (/新人价|首件|预估|老客价/.test(pre)) {
         hits.push({ price, type: '活动价', minQty: null, note: around.slice(0, 70).trim(), pos: m.index });
@@ -97,7 +103,10 @@
       const pos = t.slice(kwStart, m.index).replace(/\s+/g, ' ').length;
       const spots = [];
       const scan = (re, tt) => { const r = new RegExp(re, 'g'); let mm; while ((mm = r.exec(win))) spots.push({ t: tt, d: Math.abs(mm.index - pos) }); };
-      scan('代发', '代发价'); scan('混批|起批', '混批价'); scan('限时|1折|折后|活动|促销', '活动价');
+      // 「代发」但只有真价格语境才算：密文代发/代发下单/商家代发热度/代发商家榜/近30天代发数量/代发买家留货率
+      // 都是按钮和统计文案，不是价格标签（它们挨着价格会把档位类型带歪）。
+      // 单字排除：关键词窗口会在字中间截断（如「近30天代发数↘量」），多字 lookahead 匹配不上。
+      scan('(?<!密文|商家|件)代发(?!热|商|数|买|率|榜|下|货)', '代发价'); scan('混批|起批', '混批价'); scan('限时|1折|折后|活动|促销', '活动价');
       spots.sort((a, b) => a.d - b.d);
       const type = spots.length ? spots[0].t : '页面价';
       // 「限时1折」这类促销价再近也不当作常规拿货价
@@ -136,7 +145,7 @@
   const VALUE_SEP = /^[-—=*_·•]+$/;
   /* 后面不带价格/库存的纯规格值行（1688 常把价+库存只挂在最后一个维度上） */
   function isBareValueLine(t) {
-    if (!t || t.length > 24) return false;
+    if (!t || t.length > 40) return false;               // 值可以很长（「M【适合尺码37-38】运动鞋/厚底鞋建议拍大一码，靴子拍大两码」）；41+ 才当句子
     if (/[¥￥]|库存|已售|销量/.test(t)) return false;
     if (/^!\[/.test(t) || VALUE_SEP.test(t)) return false;
     if (LABEL_WORD.test(t) || UI_VALUE.test(t)) return false;
@@ -301,7 +310,12 @@
     const attrVals = col => {                                    // 属性区：标签单独一行、下一行是逗号值
       for (let i = 0; i < lines.length - 1; i++) {
         if (clean(lines[i]) !== col) continue;
-        const parts = clean(lines[i + 1]).split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        // 分隔符歧义：同一行同时出现「,」和「，」时按「,」拆（「，」是值内部的，如四个尺码一行、
+        // 每个尺码自己带「…拍大一码，靴子拍大两码」）；只出现一种时就按它拆。
+        // 早先一律按 [,，] 拆，把「…拍大一码，靴子拍大两码」劈成两个假规格值。
+        const raw = clean(lines[i + 1]);
+        const parts = (raw.includes(',') && raw.includes('，') ? raw.split(',') : raw.split(/[,，]/))
+          .map(s => s.trim()).filter(Boolean);
         if (parts.length >= 2) return parts;
       }
       return [];
@@ -371,7 +385,9 @@
         if (!name) continue;
         // 干净的规格值，不是句子。注意**不能连括号一起扔**：1688 的尺码常写成
         // 「36/37（标准尺码）」—— 一扔就是「每个尺码都读不到 → 整单退化成单色兜底」。
-        if (/[¥￥、，,。；;：:]/.test(name)) continue;
+        // 规格值名里可以有「，」「、」（如「建议拍大一码，靴子拍大两码」）——只有 ¥/￥ 与句子标点才判「不是值」。
+        // 早先连「，」都挡：这条值进不来 → 价格挂不上 → 整单退回无价的表值（成本错成兜底档位价）。
+        if (/[¥￥,。；;：:]/.test(name)) continue;
         if (/已售|运费|包邮|登录|选择|说明/.test(name)) continue;
         // 纯数字的规格值是真实存在的（尺码 36~45、码数 6/7/8、半码 36.5）——「纯数字一律不是规格值」
         // 会把整单的规格丢空（791436406391 报障：尺码 36~45 全是数字 → 0 个规格维度）。
