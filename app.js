@@ -245,7 +245,38 @@
     if (aiRows) {
       const nameIdx = new Map();
       dims.forEach(d => (d.values || []).forEach(v => { if (!nameIdx.has(v.name)) nameIdx.set(v.name, { dim: d, value: v }); }));
-      aiRows.forEach(r => {
+      const hasSku = new Set();
+      /* ---- 用户指定的「组合套装」追加款：1/2/3/6/12 件装 + 多色混搭 -------------------------
+       * 只在 DeepSeek 档出现（点了按钮才有）。挂在这个页面的默认规格值上：第一个颜色的第一个尺码
+       * （就是页面默认选中的那个组合）；多色混搭 = 前 3 个颜色各一件（同尺码）。
+       * 合成的是「计划行同构」的行，走下面同一个构造循环 —— 成本、件数对齐、SKU 口径与 AI 行完全一致，
+       * 价格与成本仍然只由引擎算。撞已有 SKU 的（比如 1 件装 = AI 已排的单品行）跳过，不重复加。 */
+      const defColor = (primary.values || [])[0] || null;
+      const sizeDim = dims.find(d => d !== primary && (d.values || []).length);
+      const defSize = sizeDim ? sizeDim.values[0] : null;
+      const tailCn = defSize ? ' ' + defSize.name : '', tailEn = defSize ? ' ' + enOf(defSize.name) : '';
+      const appended = [];
+      if (defColor) {
+        const baseVals = [defColor.name].concat(defSize ? [defSize.name] : []);
+        [1, 2, 3, 6, 12].forEach(q => appended.push({
+          values: baseVals, pcs: q, accessory: false, kind: q + '件装', appended: true,
+          nameCn: defColor.name + tailCn + ' ' + q + '件装',
+          nameEn: enOf(defColor.name) + tailEn + ' - ' + q + ' Pack',
+        }));
+        // 混搭只用「单件值」：值名自带件数的整包值（5片装/10片装）不参与 —— 否则 1+5+10 会混成 16 件
+        const plainVals = (primary.values || []).filter(v => packQtyOf(v.name) === 1);
+        const mixColors = plainVals.filter(v => v !== defColor).slice(0, 2);  // 再取两个颜色（共 3 色）
+        if (mixColors.length >= 1) {
+          const mixVals = [defColor.name].concat(mixColors.map(v => v.name), defSize ? [defSize.name] : []);
+          const mixPcs = 1 + mixColors.length;                               // 各 1 件
+          appended.push({
+            values: mixVals, pcs: mixPcs, accessory: false, kind: '多色混搭', appended: true,
+            nameCn: [defColor.name].concat(mixColors.map(v => v.name)).join('+') + ' 各1件 ' + mixPcs + '件装',
+            nameEn: [defColor.name].concat(mixColors.map(v => v.name)).map(enOf).join(' + ') + ' - ' + mixPcs + ' Pack',
+          });
+        }
+      }
+      const processAiRow = r => {
         const picked = (r.values || []).map(nm => nameIdx.get(String(nm).trim())).filter(Boolean);
         if (!picked.length) return;
         const vals = picked.map(x => x.value);
@@ -275,14 +306,22 @@
         // 模型没给名字 → 直接用值原文，一个多余的字都不加
         const nameCn = cnUse || cnVals.map(v => v.name).join(' + ');
         const nameEn = String(r.nameEn || '').trim() || cnVals.map(v => enOf(v.name)).join(' + ');
+        const sku = skuOf(head, combo) + '-' + pcs + 'P' + (r.accessory ? '-C' : '');
+        if (r.appended && hasSku.has(sku)) return;      // 追加款撞已有 SKU（如 1 件装 = AI 排的单品行）→ 跳过
+        hasSku.add(sku);
         add({
-          sku: skuOf(head, combo) + '-' + pcs + 'P' + (r.accessory ? '-C' : ''),
+          sku,
           nameCn, nameEn,
           spec: specOfValues(vals, dims, combo),
           colorSpec: cnVals.map(v => v.name).join('/'),
-          pcs, accessory: !!r.accessory, kind: String(r.kind || ''), ai: true, aiCn: !!cnUse
+          pcs, accessory: !!r.accessory, kind: String(r.kind || ''), ai: true, aiCn: !!cnUse,
+          appended: !!r.appended
         }, !r.accessory && pcs === bq, vals);      // 单位件、不带配件的行 = 真实规格行，排前面（封顶时不会先被丢）
-      });
+      };
+      aiRows.forEach(processAiRow);
+      appended.forEach(processAiRow);
+      // 追加款在设计款里排最前（封顶截断时不会被 AI 的其他设计款挤掉）；Array#sort 是稳定排序
+      if (extra.some(r => r.appended)) extra.sort((a, b) => (b.appended ? 1 : 0) - (a.appended ? 1 : 0));
     } else combos.forEach(combo => {
       const cnTail = combo.length ? `｜${cCn(combo)}` : '';       // 子规格写进中文名，避免同名行
       const enTail = combo.length ? ` ${cEn(combo)}` : '';        // 英文名同理

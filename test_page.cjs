@@ -299,14 +299,17 @@ async function aiPageChecks() {
     !!asked && asked.body.params.maxDims === parseInt($('maxDims').value, 10),
     JSON.stringify(asked && asked.body.params) + ' vs 上限 ' + $('maxDims').value);
   check('请求体里没有密钥（密钥只在服务端）', !!asked && !/apiKey|sk-/.test(JSON.stringify(asked.body)));
-  check('表格按 AI 的计划出 2 行（引擎本来 ' + engRows + ' 行）', rows().length === 2, rows().length + ' 行');
+  check('表格按 AI 的计划出 2 行 + 追加组合套装 6 行（引擎本来 ' + engRows + ' 行）', rows().length === 8, rows().length + ' 行');
+  check('追加款在表里：1/2/3/6/12 件装 + 多色混搭（1 件装与 AI 的行 SKU 不同 → 不跳过）',
+    w.eval('ROWS.filter(r => r.appended).map(r => r.kind).sort().join(",")') === ['1件装', '2件装', '3件装', '6件装', '12件装', '多色混搭'].sort().join(','),
+    w.eval('ROWS.filter(r => r.appended).map(r => r.kind).join(",")'));
   check('AI 给的英文变种名仍保存在数据里（只是表格不显示）',
     w.eval('(ROWS[0] && ROWS[0].nameEn) || ""') === 'White 3411 Horn', w.eval('(ROWS[0] && ROWS[0].nameEn) || ""'));
   check('④ 提示写明这份计划来自 DeepSeek', /DeepSeek/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 70));
   check('跳过的规格值与理由显示给用户', /随机款/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 70));
-  check('中文变种名那一栏写明「几行来自 DeepSeek / 几行回落模板」（按表里真实行数）',
-    /命名来源/.test($('aiBox').textContent) && /0 行来自 DeepSeek/.test($('aiBox').textContent),
-    $('aiBox').textContent.slice(0, 90));
+  check('中文变种名那一栏写明「几行来自 DeepSeek / 几行回落模板」（按表里真实行数，不含追加款）',
+    /命名来源/.test($('aiBox').textContent) && /0 行来自 DeepSeek/.test($('aiBox').textContent) && /追加/.test($('aiBox').textContent),
+    $('aiBox').textContent.slice(0, 120));
   check('④ 区回显这次用到的补充条件（证明真传进去了）',
     /补充条件/.test($('aiBox').textContent) && /只上深色系/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 120));
   check('④ 区标题那行也标明「已参考补充条件」', /已参考你的补充条件/.test($('rowHint').textContent), $('rowHint').textContent.slice(-60));
@@ -350,7 +353,9 @@ async function aiPageChecks() {
   const packIdx = rows().findIndex(tr => /5片装/.test(tr.children[2].textContent));
   const tenIdx = rows().findIndex(tr => /10片装/.test(tr.children[2].textContent));
   const cellTxt = (i, c) => (rows()[i] ? rows()[i].children[c].textContent.trim() : '');
-  check('阶梯价 + AI 计划：3 行都出（含 5片装 / 10片装）', rows().length === 3, rows().length + ' 行');
+  check('阶梯价 + AI 计划：AI 3 行都在（含 5片装 / 10片装）+ 追加款；混搭只用单件值，不混整包值',
+    rows().length === 7 && !w.eval('ROWS.some(r => r.appended && r.kind === "多色混搭")'),
+    rows().length + ' 行 ｜ ' + w.eval('ROWS.filter(r => r.appended).map(r => r.kind).join(",")'));
   check('5片装行：件数 = 5', (rows()[packIdx] && rows()[packIdx].children[pcsCol2].querySelector('input').value) === '5',
     rows()[packIdx] && rows()[packIdx].children[pcsCol2].querySelector('input').value);
   check('5片装行：成本 = 11.50（不是 57.50/25 倍）', cellTxt(packIdx, costCol2) === '11.50', cellTxt(packIdx, costCol2));

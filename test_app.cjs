@@ -295,7 +295,14 @@ const aiPlan = { ok: true, model: 'deepseek-flash', rows: [
   { kind: '带配件', values: ['白色【3411牛角】'], pcs: 1, accessory: true, nameEn: 'White 3411 Horn with Case' }
 ] };
 const air = V.buildVariants(aiProd, { unitCost: 11.5, costMode: 'spec', aiPlan });
-check('AI 计划 → 行数按计划来（4 行）', air.length === 4, air.length + ' 行');
+// 4 行 AI 计划 + 追加的组合套装款（1 件装与 AI 的单品行同 SKU，跳过；2/3/6/12 + 多色混搭 = 5 行）
+check('AI 计划 4 行 + 追加组合套装 5 行 = 9 行', air.length === 9, air.length + ' 行');
+check('追加款在：2/3/6/12 件装 + 多色混搭，且 1 件装没有重复出现',
+  ['2件装', '3件装', '6件装', '12件装', '多色混搭'].every(k => air.some(r => r.kind === k && r.appended)) &&
+  air.filter(r => r.pcs === 1 && !r.accessory).length === 2,
+  air.map(r => r.kind + ':' + r.pcs).join(' '));
+check('追加款 SKU 唯一（1 件装撞 SKU 时跳过，不是加个 -2 后缀）',
+  new Set(air.map(r => r.sku)).size === air.length, air.map(r => r.sku).join(' '));
 check('AI 给的英文名直接用（不再走词表、不标黄）',
   air.every(r => !r.enPending) && /White 3411 Horn/.test(air[0].nameEn), air.map(r => r.nameEn).join(' | '));
 check('AI 排的组合装件数=2 被保留', air.some(r => r.pcs === 2 && /2 Pack/.test(r.nameEn)));
@@ -309,7 +316,8 @@ const guard = V.buildVariants(aiProd, { unitCost: 11.5, aiPlan: { rows: [
   { kind: '原规格', values: ['页面上没有的颜色'], pcs: 1, nameEn: 'Ghost' },
   { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, nameEn: 'White' }] } });
 check('AI 行里的值在表里找不到 → 该行被丢掉（第二道保险）',
-  guard.length === 1 && guard[0].nameEn === 'White', guard.map(r => r.nameEn).join(','));
+  guard.filter(r => !r.appended).length === 1 && guard.filter(r => !r.appended)[0].nameEn === 'White',
+  guard.filter(r => !r.appended).map(r => r.nameEn).join(','));
 
 /* AI 写的中文名：用它的；它没写 → 回落成**值原文**（不是模板）。
  * 用户原话「这尾巴的变种名是被你写死了吗」「不许给我写死任何单位和组合」——
@@ -328,7 +336,8 @@ check('AI 没给中文名 → 回落成值原文，一个多余的字都不加',
 check('引擎绝不替模型补「便携收纳盒」这类配件词（名字里没有就没有）',
   !/收纳盒|支装/.test(cnRows.map(r => r.nameCn).join(' ')), cnRows.map(r => r.nameCn).join(' | '));
 check('配件这件事只落在数据列上（accessory=true / SKU 带 -C），不进名字',
-  cnRows[2].accessory === true && /-C$/.test(cnRows[2].sku), cnRows[2].sku);
+  (cnRows.find(r => r.accessory) || {}).accessory === true && /-C$/.test((cnRows.find(r => r.accessory) || {}).sku),
+  (cnRows.find(r => r.accessory) || {}).sku);
 
 /* 值名自带件数时，模型又写一遍件数 → 去掉重复的那段（但单件值行不许动：「双支装」是必要信息） */
 const packProd = { source: { offerId: '1' }, specs: [{ label: '颜色', values: [
@@ -345,7 +354,9 @@ const singleProd = { source: { offerId: '2' }, specs: [{ label: '颜色', values
   { name: '灰色30cm*30cm', code: null, price: 2.12, stock: 9 }] }] };
 const keepDbl = V.buildVariants(singleProd, { unitCost: 2.12, costMode: 'spec', aiPlan: { rows: [
   { kind: '组合装', values: ['灰色30cm*30cm'], pcs: 2, nameCn: '灰色30cm*30cm 双支装', nameEn: 'Grey 2 Pack' }] } });
-check('单件值行里的「双支装」不会被误删（那是必要信息）', /双支装/.test(keepDbl[0].nameCn), keepDbl[0].nameCn);
+check('单件值行里的「双支装」不会被误删（那是必要信息）',
+  keepDbl.some(r => !r.appended && /双支装/.test(r.nameCn)),
+  keepDbl.filter(r => !r.appended).map(r => r.nameCn).join(' | '));
 check('不传 AI 计划时走引擎规则：3 个规格值 → 3 行，全是值原文',
   V.buildVariants(aiProd, { unitCost: 11.5 }).length === 3 &&
   V.buildVariants(aiProd, { unitCost: 11.5 }).every(r => !UNIT_WORDS.test(r.nameCn)));
@@ -378,13 +389,15 @@ const aiTwo = V.buildVariants(twoDimProd, { unitCost: 11.5, costMode: 'spec', ai
   { kind: '两件装', values: ['白色【3411牛角】', '36-37适合35-36码'], pcs: 2, accessory: false, nameEn: 'White 36-37 x2' },
   { kind: '混搭', values: ['白色【3411牛角】', '粉红【3411牛角】', '36-37适合35-36码'], pcs: 2, accessory: false, nameEn: 'White+Pink 36-37' }
 ] } });
-check('双规格 AI 行：一件装行的件数 = 1（不是 2）', aiTwo[0] && aiTwo[0].pcs === 1, aiTwo[0] && aiTwo[0].pcs);
+  // 追加的组合套装款也在这张表里；这几条断言说的是 AI 自己排的那几行 → 只看非追加行
+const aiTwoPure = aiTwo.filter(r => !r.appended);
+check('双规格 AI 行：一件装行的件数 = 1（不是 2）', aiTwoPure[0] && aiTwoPure[0].pcs === 1, aiTwoPure[0] && aiTwoPure[0].pcs);
 near('双规格 AI 行：一件装行的每件成本 = 11.5（不是 23）',
-  aiTwo[0] && aiTwo[0].unitCost, 11.5);
+  aiTwoPure[0] && aiTwoPure[0].unitCost, 11.5);
 // 11.5 + 运费 10% = 12.65 总成本 → 12.65 ÷ (0.68×0.67) = 27.77（曾被算成约两倍）
-near('双规格 AI 行：一件装行的定价 = 27.77（不是按两件算的 55.53）', aiTwo[0] && aiTwo[0].pricing.price, 27.77);
-check('双规格 AI 行：两件装行件数 = 2', aiTwo[1] && aiTwo[1].pcs === 2, aiTwo[1] && aiTwo[1].pcs);
-check('双规格 AI 行：2 色混搭行件数 = 2（同维度两个值相加）', aiTwo[2] && aiTwo[2].pcs === 2, aiTwo[2] && aiTwo[2].pcs);
+near('双规格 AI 行：一件装行的定价 = 27.77（不是按两件算的 55.53）', aiTwoPure[0] && aiTwoPure[0].pricing.price, 27.77);
+check('双规格 AI 行：两件装行件数 = 2', aiTwoPure[1] && aiTwoPure[1].pcs === 2, aiTwoPure[1] && aiTwoPure[1].pcs);
+check('双规格 AI 行：2 色混搭行件数 = 2（同维度两个值相加）', aiTwoPure[2] && aiTwoPure[2].pcs === 2, aiTwoPure[2] && aiTwoPure[2].pcs);
 
 // 混搭行：同一维度里挑了多个值 → 那一列必须把值都列出来（否则表里看不到，件数看着莫名其妙）
 const mixTwo = V.buildVariants(twoDimProd, { unitCost: 11.5, costMode: 'spec', aiPlan: { rows: [

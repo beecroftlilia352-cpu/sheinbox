@@ -501,7 +501,7 @@ function aiBoxHtml(j) {
   const parts = [];
   // 名字是谁写的 —— 以**表里真实的行**为准（引擎可能还会丢掉不合法行），不是以模型自称的为准
   const n = ROWS.length || (j.rows || []).length;
-  const cnUsed = ROWS.length ? ROWS.filter(r => r.aiCn).length
+  const cnUsed = ROWS.length ? ROWS.filter(r => r.aiCn && !r.appended).length
     : ((typeof j.nameCnUsed === 'number') ? j.nameCnUsed : 0);
   const note = String(j.note || '').trim();
   if (note) parts.push('· 这次生成参考了你的补充条件：<b>' + esc(note) + '</b>');
@@ -511,6 +511,11 @@ function aiBoxHtml(j) {
   (j.notes || []).forEach(x => parts.push('· ' + esc(x)));
   (j.skipped || []).forEach(s => parts.push('· 没上架：<b>' + esc(s.value) + '</b>（' + esc(s.reason) + '）'));
   if (!(j.skipped || []).length) parts.push('· 所有规格值都排进去了，没有跳过的');
+  const appd = ROWS.filter(r => r.appended);
+  if (appd.length) {
+    parts.push('· 你指定的组合套装款已追加：<b>' + [...new Set(appd.map(r => r.kind))].join(' / ') + '</b>（共 ' + appd.length +
+      ' 行，挂在页面默认规格值上；成本/定价仍由引擎按各行自己那组算）');
+  }
   if (j.truncated) parts.push('· 行数超上限：只保留前 ' + j.truncated.kept + ' 行（本来 ' + j.truncated.total + ' 行）');
   return parts.join('<br>');
 }
