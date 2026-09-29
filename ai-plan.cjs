@@ -116,6 +116,8 @@ function buildMessages(product, params, fixHint) {
   // 不许自己造单位/配件词）。所以它进的是 payload，而不是 system 提示词 —— 模型改不了规矩。
   const note = cleanNote(p.note);
   if (note) payload.extra_conditions = note;
+  const nl = nameLimitOf(note);
+  if (nl) payload.hard_limits = (payload.hard_limits || []).concat(['中文变种名（nameCn）不超过 ' + nl + ' 个字 —— 超过会被整份打回重排']);
   const msgs = [
     { role: 'system', content: SYS },
     { role: 'user', content: JSON.stringify(payload) }
@@ -309,6 +311,22 @@ function scope(product, maxDims) {
 }
 
 /* ---------- 主流程：问 → 校验 → 不合格带纠错重问一次 → 再不合格就作废 ---------- */
+/* 补充条件里的名字字数要求 → **硬约束**。
+ * 为什么：模型的自觉靠不住 —— 用户在补充条件里写「规格名称不能超过9个字」，生成出来的超了（用户报过）。
+ * 只认中文名（nameCn）：英文名按字符数算没意义。 */
+const NAME_LIMIT_RES = [
+  /(?:不能超过|不超过|超过|少于|小于|至多|最多|限|≤|<=|≦)\s*(\d{1,2})\s*(?:个)?字/,
+  /(\d{1,2})\s*(?:个)?字(?:以内|以下|之内)/,
+];
+function nameLimitOf(note) {
+  const s = String(note || '');
+  for (const re of NAME_LIMIT_RES) {
+    const m = re.exec(s);
+    if (m) { const n = Number(m[1]); if (n >= 2 && n <= 60) return n; }
+  }
+  return 0;
+}
+
 async function plan(product, params, cfg) {
   const c = cfg || loadConfig();
   if (!c.hasKey) return { ok: false, error: '没配 DeepSeek 密钥（缺 .ai.json 或 DEEPSEEK_API_KEY）—— 已按引擎规则生成', noKey: true };
@@ -317,7 +335,9 @@ async function plan(product, params, cfg) {
   const scoped = scope(product, params && params.maxDims);
   if (!scoped.specs.length) return { ok: false, error: '这个商品没有规格数据，AI 没有可排的东西' };
   const attempts = [];
+  const nameMax = nameLimitOf(note);          // 补充条件里的名字字数要求（0 = 没提）
   let hint = '';
+  let nameOnly = null;                        // 只差名字长度的那版（硬规则全过）：兜底用
   const MAX_TRIES = 3;      // 模型偶尔整份答歪（比如返回的不是 JSON）→ 多给一次机会，别两次就放弃
   for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
     const t0 = Date.now();
@@ -338,11 +358,30 @@ async function plan(product, params, cfg) {
       continue;
     }
     const norm = normalize(scoped, parsed, { maxRows, note });
+    if (norm.ok && nameMax) {
+      // 补充条件里写了「中文名不超过 N 个字」→ 逐行量，超了整份打回（和件数硬校验一个套路）
+      const over = (norm.rows || []).filter(r => String(r.nameCn || '').length > nameMax);
+      if (over.length) {
+        const ex = over.slice(0, 3).map(r => '第 ' + ((norm.rows || []).indexOf(r) + 1) + ' 行「' + r.nameCn + '」' + String(r.nameCn).length + ' 字').join('；');
+        // 这一版除了名字长度别的都合法 → 留一手：三轮都不听话时用它兜底（照排 + 页面写明超了哪几行），
+        // 而不是整份丢掉让用户看到「什么都没有」。
+        nameOnly = { rows: norm.rows, over: over.map(r => String(r.nameCn)), note: norm.notes };
+        norm.ok = false;
+        norm.errs = (norm.errs || []).concat(['你补充条件里要求中文名不超过 ' + nameMax + ' 个字，但 ' + over.length + ' 行超了：' + ex]);
+        norm.error = '中文名超过你要求的 ' + nameMax + ' 个字（' + over.length + ' 行）：' + ex +
+          ' —— 压短办法：丢掉件数后缀（件数那一列已经写了）和括号里的说明，只留颜色/尺码；' +
+          '规格值本身就把名字撑超的，按能区分的最短写法来。只输出那个 JSON 对象。';
+      }
+    }
     attempts.push({ attempt: attempt + 1, ms: Date.now() - t0, rows: (norm.rows || []).length, errs: norm.errs || [] });
     if (norm.ok) {
       norm.model = c.model;
       norm.ms = Date.now() - t0;
       norm.attempts = attempts;
+      if (nameMax) {
+        norm.nameLimit = nameMax;
+        norm.notes = (norm.notes || []).concat(['补充条件里的「中文名不超过 ' + nameMax + ' 个字」已按硬约束执行（超出的会打回重排）']);
+      }
       if (scoped.hiddenDims) norm.notes = (norm.notes || []).concat([`页面上还有 ${scoped.hiddenDims} 级规格没交给 AI（表格只显示前 ${scoped.specs.length} 级）`]);
       return norm;
     }
@@ -357,6 +396,16 @@ async function plan(product, params, cfg) {
   if (firstBad && firstBad !== last) {
     const o = firstBad.errs.join('；');
     if (o && o !== why) parts.push('另一次：' + o);
+  }
+  if (nameOnly) {
+    // 只差名字长度的那版照排：值本身就把名字撑超的情况（如「柠檬黄 42/43（标准尺码）」），
+    // 模型压不到 N 字，硬丢只会让用户什么都拿不到 —— 排着 + 把超标行写在页面上，比空白诚实。
+    return {
+      ok: true, rows: nameOnly.rows, attempts, nameLimit: nameMax,
+      notes: (nameOnly.note || []).concat(['注意：你补充条件里要求名字不超过 ' + nameMax + ' 个字，有 ' + nameOnly.over.length +
+        ' 行没压到（规格值本身就占到 ' + String(nameOnly.over[0] || '').length + ' 字左右）—— 已照排：' +
+        nameOnly.over.slice(0, 3).join(' / ') + (nameOnly.over.length > 3 ? ' …' : '')])
+    };
   }
   return { ok: false, error: `DeepSeek 的计划 ${attempts.length} 次都没通过：` + parts.join(' ／ '), attempts };
 }

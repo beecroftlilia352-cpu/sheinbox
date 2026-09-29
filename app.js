@@ -255,12 +255,19 @@
       const sizeDim = dims.find(d => d !== primary && (d.values || []).length);
       const defSize = sizeDim ? sizeDim.values[0] : null;
       const tailCn = defSize ? ' ' + defSize.name : '', tailEn = defSize ? ' ' + enOf(defSize.name) : '';
+      // 补充条件里写了「名字不超过 N 个字」时（服务端解析出来挂在计划上），追加款名字也得守 ——
+      // 逐级压缩：全称（柠檬黄 36/37 2件装）→ 柠檬黄36/37×2 → 柠檬黄×2。
+      const nameMaxCn = (p.aiPlan && p.aiPlan.nameLimit) || 0;
+      const fitCn = (full, compact, tiny) => (!nameMaxCn || full.length <= nameMaxCn) ? full : ((compact.length <= nameMaxCn) ? compact : tiny);
+      // 值里常带括号注释（白色【3411牛角】/36/37（标准尺码））：名字里可以省，计划里的值仍是逐字原文
+      const stripMarks = s => String(s || '').replace(/[【（(\[][^】）)\]]*[】）)\]]/g, '').trim();
       const appended = [];
       if (defColor) {
         const baseVals = [defColor.name].concat(defSize ? [defSize.name] : []);
         [1, 2, 3, 6, 12].forEach(q => appended.push({
           values: baseVals, pcs: q, accessory: false, kind: q + '件装', appended: true,
-          nameCn: defColor.name + tailCn + ' ' + q + '件装',
+          nameCn: fitCn(defColor.name + tailCn + ' ' + q + '件装',
+            stripMarks(defColor.name) + (defSize ? stripMarks(defSize.name) : '') + '×' + q, stripMarks(defColor.name) + '×' + q),
           nameEn: enOf(defColor.name) + tailEn + ' - ' + q + ' Pack',
         }));
         // 混搭只用「单件值」：值名自带件数的整包值（5片装/10片装）不参与 —— 否则 1+5+10 会混成 16 件
@@ -271,7 +278,8 @@
           const mixPcs = 1 + mixColors.length;                               // 各 1 件
           appended.push({
             values: mixVals, pcs: mixPcs, accessory: false, kind: '多色混搭', appended: true,
-            nameCn: [defColor.name].concat(mixColors.map(v => v.name)).join('+') + ' 各1件 ' + mixPcs + '件装',
+            nameCn: fitCn([defColor.name].concat(mixColors.map(v => v.name)).join('+') + ' 各1件 ' + mixPcs + '件装',
+              '混搭' + (mixColors.length + 1) + '色×' + mixPcs, '混搭' + mixPcs + '件'),
             nameEn: [defColor.name].concat(mixColors.map(v => v.name)).map(enOf).join(' + ') + ' - ' + mixPcs + ' Pack',
           });
         }

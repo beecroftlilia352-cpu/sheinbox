@@ -297,6 +297,11 @@ const aiPlan = { ok: true, model: 'deepseek-flash', rows: [
 const air = V.buildVariants(aiProd, { unitCost: 11.5, costMode: 'spec', aiPlan });
 // 4 行 AI 计划 + 追加的组合套装款（1 件装与 AI 的单品行同 SKU，跳过；2/3/6/12 + 多色混搭 = 5 行）
 check('AI 计划 4 行 + 追加组合套装 5 行 = 9 行', air.length === 9, air.length + ' 行');
+// 用户补充条件限了「名字不超过 9 个字」→ 追加款名字也守这条（服务端解析出来挂在计划上）
+const airNm = V.buildVariants(aiProd, { unitCost: 9, costMode: 'spec', marginPct: 33, bargainPct: 20, discountPct: 15, freightPct: 10, marginBase: 'net', aiPlan: { rows: [{ kind: '单件装', values: ['白色'], pcs: 1, accessory: false, nameEn: 'White', nameCn: '白色' }], nameLimit: 9 } });
+check('计划带 nameLimit=9 → 追加款名字也不超过 9 字（逐级压缩成 白色×2 这种）',
+  airNm.filter(r => r.appended).length > 0 && airNm.filter(r => r.appended).every(r => String(r.nameCn).length <= 9),
+  airNm.filter(r => r.appended).map(r => String(r.nameCn).length + ':' + r.nameCn).join(' | '));
 check('追加款在：2/3/6/12 件装 + 多色混搭，且 1 件装没有重复出现',
   ['2件装', '3件装', '6件装', '12件装', '多色混搭'].every(k => air.some(r => r.kind === k && r.appended)) &&
   air.filter(r => r.pcs === 1 && !r.accessory).length === 2,

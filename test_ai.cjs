@@ -221,6 +221,53 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
     rSkip.ok === true, String(rSkip.error || '').slice(0, 140));
   check('被忽略的 skipped 会在备注里说明', /页面上没有的值/.test((rSkip.notes || []).join('；')), JSON.stringify((rSkip.notes || []).slice(-2)));
 
+  /* 补充条件里的「名字不超过 N 个字」= 硬约束：模型写超了要被打回重排（用户报过「限制了9个字但还是超」） */
+  const longPlan = { plan: [
+    { kind: '单件装', values: ['灰色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'Grey', nameCn: '灰色30cm*30cm 单件装 加长名字测试' },
+    { kind: '单件装', values: ['白色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'White', nameCn: '白色' },
+    { kind: '单件装', values: ['【清仓随机款，尺码可指定】'], pcs: 1, accessory: false, nameEn: 'Random', nameCn: '清仓' },
+    { kind: '单件装', values: ['36-37适合35-36码'], pcs: 1, accessory: false, nameEn: '36-37', nameCn: '36-37' }] };
+  const shortPlan = { plan: longPlan.plan.map(r => Object.assign({}, r, { nameCn: String(r.nameCn).slice(0, 9) })) };
+  let nmCalls = 0;
+  const srvNm = await new Promise((resolve) => {
+    const sv = http.createServer((req, res) => {
+      nmCalls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(nmCalls === 1 ? longPlan : shortPlan) } }] }));
+    });
+    sv.listen(0, '127.0.0.1', () => resolve(sv));
+  });
+  const rNm = await A.plan(prod, { note: '规格名称不能超过9个字' }, { baseUrl: 'http://127.0.0.1:' + srvNm.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvNm.close();
+  check('补充条件「不能超过9个字」→ 超长的第一版被打回、第二版通过',
+    rNm.ok === true && nmCalls === 2 && (rNm.attempts || []).length === 2,
+    'ok=' + rNm.ok + ' 调用=' + nmCalls + ' 轮次=' + (rNm.attempts || []).length);
+  check('打回原因点明「9 个字」和具体哪行几字',
+    JSON.stringify((rNm.attempts[0] || {}).errs || []).includes('9 个字') && /单件装/.test(JSON.stringify((rNm.attempts[0] || {}).errs || [])),
+    JSON.stringify((rNm.attempts[0] || {}).errs || []).slice(0, 150));
+  check('通过后备注里写明这条已按硬约束执行', (rNm.notes || []).some(x => /9 个字/.test(x) && /硬约束/.test(x)), JSON.stringify((rNm.notes || []).slice(-1)));
+  check('通过的这一版所有行都不超 9 字', (rNm.rows || []).every(r => String(r.nameCn || '').length <= 9),
+    (rNm.rows || []).map(r => String(r.nameCn || '').length).join(','));
+
+  const srvNm2 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(shortPlan) } }] }));
+  const rNm2 = await A.plan(prod, { note: '名字9个字以内' }, { baseUrl: 'http://127.0.0.1:' + srvNm2.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvNm2.close();
+  check('「9个字以内」这种写法也认得（一次就过）', rNm2.ok === true && rNm2.nameLimit === 9, 'nameLimit=' + rNm2.nameLimit);
+
+  const srvNm3 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(longPlan) } }] }));
+  const rNm3 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvNm3.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvNm3.close();
+  // 三轮都压不到 9 字（值本身太长）→ 不整份丢空：最后一版照排 + 页面写明哪几行超了
+  const srvNm4 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(longPlan) } }] }));
+  const rNm4 = await A.plan(prod, { note: '规格名称不能超过9个字' }, { baseUrl: 'http://127.0.0.1:' + srvNm4.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvNm4.close();
+  check('三轮都超字数 → 照排最后那版（硬规则全过的）+ 备注写明超标行，不是空白',
+    rNm4.ok === true && (rNm4.rows || []).length > 0 && (rNm4.notes || []).some(x => /9 个字/.test(x) && /没压到/.test(x)),
+    'ok=' + rNm4.ok + ' 行=' + (rNm4.rows || []).length + ' ／ ' + JSON.stringify((rNm4.notes || []).slice(-1)).slice(0, 120));
+
+  check('补充条件没提字数 → 不量长度，长名字照过（不误伤）',
+    rNm3.ok === true && (rNm3.rows || []).some(r => String(r.nameCn || '').length > 9), 'ok=' + rNm3.ok);
+
   /* 名字里写了件数（claim）时会走对齐/夹取分支 —— 那两个计数器以前没声明，一走就 ReferenceError 把整轮打崩 */
   const claimPlan = {
     plan: [{ kind: '单品', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey 2 Pack', nameCn: '灰色 两件装' },
