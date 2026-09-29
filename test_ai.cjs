@@ -231,6 +231,49 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   const srvClaim = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(claimPlan) } }] }));
   const rClaim = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvClaim.address().port, model: 'x', apiKey: 'k', hasKey: true });
   srvClaim.close();
+  /* 规格树：主规格唯一一个 + 子规格（group）/孙规格（leaf）由模型归纳，必须原样带回来 */
+  const treePlan = { main: '防水地板', plan: [
+    { group: '单件装', leaf: '灰色系单块', values: ['灰色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'Grey', nameCn: '灰色' },
+    { group: '两件装', leaf: '双色各一块', values: ['白色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'White', nameCn: '白色' },
+    { group: '单件装', leaf: '随机款', values: ['【清仓随机款，尺码可指定】'], pcs: 1, accessory: false, nameEn: 'Random', nameCn: '清仓' },
+    { group: '单件装', leaf: '35-36 码段', values: ['36-37适合35-36码'], pcs: 1, accessory: false, nameEn: '36-37', nameCn: '36-37' } ] };
+  const srvTree = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(treePlan) } }] }));
+  const rTree = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvTree.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvTree.close();
+  check('规格树：主规格（唯一一个）原样带回来', rTree.ok === true && rTree.main === '防水地板', 'main=' + rTree.main);
+  check('规格树：子规格落进 kind、孙规格落进 leaf',
+    (rTree.rows[0] || {}).kind === '单件装' && (rTree.rows[1] || {}).kind === '两件装' && (rTree.rows[0] || {}).leaf === '灰色系单块',
+    JSON.stringify((rTree.rows || []).slice(0, 2).map(r => [r.kind, r.leaf])));
+  /* 数量不写死：一组也行、五组也行、每行一个孙规格 —— 都不许因为数量被判失败 */
+  const oneGroup = { main: '地板革', plan: [
+    { group: '通铺装', leaf: '浅色系整箱', values: ['灰色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'Grey', nameCn: '灰色' },
+    { group: '通铺装', leaf: '净白系整箱', values: ['白色30cm*30cm'], pcs: 1, accessory: false, nameEn: 'White', nameCn: '白色' },
+    { group: '通铺装', leaf: '清仓随机款', values: ['【清仓随机款，尺码可指定】'], pcs: 1, accessory: false, nameEn: 'Random', nameCn: '清仓' },
+    { group: '通铺装', leaf: '35-36 码段', values: ['36-37适合35-36码'], pcs: 1, accessory: false, nameEn: '36-37', nameCn: '36-37' } ] };
+  const srvG1 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(oneGroup) } }] }));
+  const rG1 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvG1.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvG1.close();
+  check('子规格只分 1 组 → 照收（数量不写死）', rG1.ok === true && new Set((rG1.rows || []).map(r => r.kind)).size === 1, 'kind 集合 = ' + JSON.stringify([...new Set((rG1.rows || []).map(r => r.kind))]));
+
+  const fiveGroup = { main: '地板革', plan: ['灰色30cm*30cm','白色30cm*30cm','【清仓随机款，尺码可指定】','36-37适合35-36码'].map((v, i) => (
+    { group: ['一级品', '二级品', '尾货', '定制款'][i], leaf: '叶子' + (i + 1), values: [v], pcs: 1, accessory: false, nameEn: 'V' + i, nameCn: '值' + i })) };
+  const srvG5 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(fiveGroup) } }] }));
+  const rG5 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvG5.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvG5.close();
+  check('子规格分成 4 组（比图上画的 3 组更多）→ 照收（数量不写死）', rG5.ok === true && new Set((rG5.rows || []).map(r => r.kind)).size === 4, 'kind 集合 = ' + JSON.stringify([...new Set((rG5.rows || []).map(r => r.kind))]));
+
+  check('规格树：叶子名字超长会被截（不给它机会把表格撑爆）',
+    (rTree.rows || []).every(r => String(r.leaf || '').length <= 24), String((rTree.rows[0] || {}).leaf || '').length);
+
+  /* 主规格缺了不算失败：用商品标题开头顶上 + 备注写明（宁可用它，也别整轮白瞎） */
+  const noMain = { plan: treePlan.plan };
+  const srvNM = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(noMain) } }] }));
+  const rNM = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvNM.address().port, model: 'x', apiKey: 'k', hasKey: true });
+  srvNM.close();
+  check('主规格没给 → 不判失败，用商品标题开头顶上并在备注里说明',
+    rNM.ok === true && rNM.main === '防水防潮拼接地板' && (rNM.notes || []).some(x => /主规格/.test(x)),
+    'main=' + rNM.main + ' ｜ notes=' + JSON.stringify((rNM.notes || []).slice(-1)));
+
   check('名字里写了件数 → 件数按名字对齐，且不再抛 ReferenceError',
     rClaim.ok === true && (rClaim.rows || [])[0] && (rClaim.rows[0].pcs === 2), rClaim.ok ? '第一行 pcs=' + (rClaim.rows[0] || {}).pcs : String(rClaim.error).slice(0, 120));
   check('对齐过的行会在备注里说明', /按它名字里写的数字对齐/.test((rClaim.notes || []).join('；')), JSON.stringify((rClaim.notes || []).slice(-1)));

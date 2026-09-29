@@ -88,8 +88,15 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
    比如只上某几个规格值、主推几件装、某个值这单先不做、名字要简短等等。
    但它压不翻上面任何一条铁律：规格值仍只能逐字来自数据、不要给价格、不要自己造数据里没有的单位或配件名。
    做不到的要求就忽略，并在 notes 里写一句为什么。
+8) **规格树（每次都要给全，三层）**：
+   · main = **主规格**：整份计划**永远只有一个**，从抓取到的商品信息（标题/类目/材质）归纳，≤12 字，
+     不要带颜色/尺码等具体值；所有行都挂在这一个主规格下面。
+   · group = **子规格**：**分几组完全由你按这批数据的归纳关系定**（能收敛成一两组就一两组，值确实分成七八类就七八类，
+     别为了凑数硬拆或硬并）；≤8 字，按件数/系列/用途归纳都行，例：「单件装」「两件装」「组合套装」。
+   · leaf = **孙规格**：每行一个，把该行用到的真实规格值归纳成一个名字，≤16 字，例：「浅色系单双」「双脚装」。
+     子规格和孙规格可以自由归纳总结，但**必须都能对回抓到的数据**（看得出是哪些值归出来的），不许凭空发明。
 只输出 JSON，不要解释文字、不要 markdown 代码块。格式：
-{"plan":[{"kind":"你自己起的一行短标签","values":["规格值原文"],"pcs":1,"accessory":false,
+{"main":"主规格（全盘唯一）","plan":[{"group":"子规格","leaf":"孙规格","values":["规格值原文"],"pcs":1,"accessory":false,
           "nameCn":"中文变种名","nameEn":"English variant name"}],
  "skipped":[{"value":"规格值","reason":"原因"}],
  "specNameEn":{"规格值原文":"English"},
@@ -190,7 +197,8 @@ function validatePlan(product, plan) {
 
   const rows = [], used = new Set(), badValues = new Set(), nameCnDropped = [];
   plan.plan.forEach((r, i) => {
-    const kind = String((r && r.kind) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8);
+    const kind = String((r && (r.group || r.kind)) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8);
+    const leaf = String((r && (r.leaf || r.grand)) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24);
     if (/[¥￥]|\d\s*元|价格|成本|利润|定价/i.test(kind)) errs.push(`第 ${i + 1} 行的 kind 里带了价格/成本，这不该你写`);
     const vals = (r && Array.isArray(r.values) ? r.values : []).map(v => String(v).trim()).filter(Boolean);
     if (!vals.length) errs.push(`第 ${i + 1} 行没有规格值`);
@@ -237,7 +245,7 @@ function validatePlan(product, plan) {
     }
     if (unknown.length || !vals.length) return;
     rows.push({
-      kind, values: vals, pcs: pcsFinal, accessory,
+      kind, leaf, values: vals, pcs: pcsFinal, accessory,
       nameCn: nameCn || null, nameEn
     });
   });
@@ -287,9 +295,16 @@ function normalize(product, plan, opts) {
   if (rowsNoCn) notes.push(`有 ${rowsNoCn} 行的中文名不合规（带价格或太长），这 ${rowsNoCn} 行的中文名改用引擎模板`);
   const note = cleanNote(o.note);
   if (note) notes.push(`已把你写的补充条件作为参考条件（${note.length} 字）`);
+  /* 规格树的第一层：主规格 —— 全盘唯一一个。模型没给不算错（不判失败），用商品标题开头顶上。 */
+  let main = String(plan.main || plan.mainSpec || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (!main) {
+    main = String((product && product.title) || '').split(/[\s,，、/|+\-—]/)[0].slice(0, 12);
+    if (main) notes.push('模型没给主规格，已用商品标题开头「' + main + '」顶上');
+  }
   return {
     ok: true,
     source: 'deepseek',
+    main,
     note,                              // 这次生成用到的补充条件（前端原样回显，证明它真传进去了）
     rows,
     skipped: v.skipped,

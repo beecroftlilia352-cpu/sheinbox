@@ -174,7 +174,7 @@ check('换商品后重量跟着换（211g）', $('weight').value === '211', $('w
 w.eval('PRODUCT.specs = undefined; PRODUCT.colors = [{name:"粉色",code:"C1Y1P",price:0.34},{name:"绿色",code:"C1Y1Q",price:0.34}]; onProduct(PRODUCT, "老格式测试");');
 check('老格式（只有 colors）→ 仍按规格生成行（2 个值 → 2 行）', rows().length === 2, `${rows().length} 行`);
 check('老格式 → 规格列有值、SKU 仍用页面编码',
-  tcell(0, /颜色|规格/) === '粉色' && /C1Y1P/.test(cell(0, 1)),
+  tcell(0, /^(颜色|规格)$/) === '粉色' && /C1Y1P/.test(cell(0, 1)),
   cell(0, 1) + ' / ' + tcell(0, /颜色|规格/));
 
 // 8.95) 组合值规格（【父】子）→ 表头/CSV 出「父规格/子规格」两列，SKU 用页面顺序 S1..
@@ -184,7 +184,7 @@ w.eval('PRODUCT.source = {offerId:"897021596330"}; PRODUCT.specs = [{label:"功�
 check('组合值：表头拆成 父规格 / 子规格 两列',
   /父规格/.test($('thead').textContent) && /子规格/.test($('thead').textContent), $('thead').textContent.trim().slice(0, 70));
 check('组合值：每格是拆开的原值（不写死「颜色规格」）',
-  tcell(0, /父规格/) === '英文版.欧规' && tcell(0, /子规格/) === '紫色全自动32mm',
+  tcell(0, /^父规格$/) === '英文版.欧规' && tcell(0, /^子规格$/) === '紫色全自动32mm',
   tcell(0, /父规格/) + ' | ' + tcell(0, /子规格/));
 check('组合值：SKU 用页面顺序 S1/S2 + 包装后缀', cell(0, 1) === 'YQ-6330-S1-1P' && cell(1, 1) === 'YQ-6330-S2-1P', cell(0, 1) + ',' + cell(1, 1));
 check('组合值：变种名 = 页面规格值原文（不加任何我编的尾巴）', vname(0) === '【英文版.欧规】紫色全自动32mm', vname(0));
@@ -267,17 +267,31 @@ async function aiPageChecks() {
     rows().map(tr => tr.children[2].textContent.trim()).join(' | ').slice(0, 80));
   check('表头里找得到「定价」列', priceCol > 0, '列号 ' + priceCol);
   const engRows = rows().length;
-  const plan = { ok: true, model: 'deepseek-flash', elapsedSec: 4.4, note: '主推 2 件装；只上深色系', notes: ['先原规格再组合'],
+  const plan = { ok: true, model: 'deepseek-flash', elapsedSec: 4.4, main: '棉拖鞋', note: '主推 2 件装；只上深色系', notes: ['先原规格再组合'],
     skipped: [{ value: '【清仓随机款，尺码可指定】', reason: '随机款颜色不确定' }],
     rows: [
-      { kind: '原规格', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameEn: 'White 3411 Horn' },
-      { kind: '组合装', values: ['白色【3411牛角】', '粉红【3411牛角】'], pcs: 2, accessory: false, nameEn: 'White + Pink - 2 Pack' }
+      { kind: '原规格', leaf: '白色系单双', values: ['白色【3411牛角】'], pcs: 1, accessory: false, nameEn: 'White 3411 Horn' },
+      { kind: '组合装', leaf: '双色混搭双人组', values: ['白色【3411牛角】', '粉红【3411牛角】'], pcs: 2, accessory: false, nameEn: 'White + Pink - 2 Pack' }
     ] };
   let asked = null;
   w.fetch = async (u, o) => { asked = { u, body: JSON.parse(o.body) }; return { json: async () => plan }; };
   $('btnAi').click();
   await w.eval('new Promise(r => setTimeout(r, 40))');       // 等 aiPlanNow 里的 await 走完
   check('点按钮就把规格数据发给了 /api/ai-plan', !!asked && asked.u === '/api/ai-plan', asked && asked.u);
+  /* 规格树：主规格唯一一个 + 子规格/孙规格两级是 AI 从抓到的数据里归纳的 */
+  check('规格树：主规格（唯一一个）显示出来了', /主规格/.test($('specTree').textContent) && /棉拖鞋/.test($('specTree').textContent), $('specTree').textContent.slice(0, 80));
+  check('规格树：子规格按组显示并带行数', /原规格/.test($('specTree').textContent) && /\(1 行\)/.test($('specTree').textContent), $('specTree').textContent.slice(0, 120));
+  check('规格树：孙规格（归纳出来的名字）也在树上', /白色系单双/.test($('specTree').textContent), $('specTree').textContent.slice(0, 160));
+  check('表格新增「子规格(归纳) / 孙规格(归纳)」两列且有值',
+    tcell(0, /^子规格\(归纳\)$/) === '原规格' && tcell(0, /^孙规格\(归纳\)$/) === '白色系单双',
+    tcell(0, /^子规格\(归纳\)$/) + ' | ' + tcell(0, /^孙规格\(归纳\)$/));
+  check('T1: 引擎档不显示规格树（没有归纳这一步）', (function () {
+    const before = $('specTree').style.display;
+    w.eval('AI_PLAN = null; AI_MAIN = ""; regen(true);');
+    const after = $('specTree').style.display;
+    w.eval('AI_PLAN = ' + JSON.stringify(plan) + '; AI_MAIN = "棉拖鞋"; regen(true);');
+    return after === 'none' && before === 'block';
+  })(), 'display=' + $('specTree').style.display);
   check('补充条件跟着规格数据一起发过去了（note）',
     !!asked && asked.body.params.note === '主推 2 件装；只上深色系', JSON.stringify(asked && asked.body.params));
   check('请求里带上「显示中的规格级数」（跟着参数区那个上限）',
@@ -390,6 +404,7 @@ async function aiPageChecks() {
     const lines = t.trim().split(/\r?\n/);
     check('CSV 行数 = 变种数 + 表头', lines.length === rows().length + 1, `${lines.length} 行`);
     check('CSV 表头含 定价(元)', /定价\(元\)/.test(lines[0]));
+    check('CSV 表头含规格树三列（主规格/子规格/孙规格）', /主规格,子规格,孙规格/.test(lines[0]), lines[0].split(',').slice(0, 8).join(','));
     check('CSV 规格列名来自规格维度（双规格 → 颜色,尺码）', /颜色,尺码/.test(lines[0]), lines[0].split(',').slice(0, 6).join(','));
     check('CSV 含 SKU 前缀 YQ-', /YQ-\d{4}/.test(lines[1]), lines[1]);
     check('CSV 里仍然有 Variant Name 列（表格里不显示，导出照旧给）', /Variant Name/.test(lines[0]), lines[0].slice(0, 70));
