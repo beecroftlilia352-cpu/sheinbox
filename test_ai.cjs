@@ -352,6 +352,72 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   check('模型没给中文名 → 那一栏留空（由前端回落引擎模板）',
     nc.ok && nc.rows[0].nameCn === null && nc.nameCnUsed === 0, JSON.stringify({ cn: nc.ok && nc.rows[0].nameCn, used: nc.nameCnUsed }));
 
+  /* 12) 混搭套装名里的「×2」是每款数量，不是总件数。
+   *     旧逻辑抓第一个 ×2 覆盖掉正确件数 → 同一处改写卡死每一轮，模型怎么写都过不了
+   *     （用户报障：第 7 行…规格值本身就有 5 件…但件数写的是 2，另两次同样形状）。 */
+  const fiveVals = ['灰色30cm*30cm', '灰色30cm*30cm', '白色30cm*30cm', '白色30cm*30cm', '【清仓随机款，尺码可指定】'];
+  const mixCov = [
+    { kind: '单品', values: ['灰色30cm*30cm'], pcs: 1, nameEn: 'Grey', nameCn: '灰色' },
+    { kind: '单品', values: ['白色30cm*30cm'], pcs: 1, nameEn: 'White', nameCn: '白色' },
+    { kind: '单品', values: ['【清仓随机款，尺码可指定】'], pcs: 1, nameEn: 'Clear', nameCn: '清仓' },
+    { kind: '单品', values: ['36-37适合35-36码'], pcs: 1, nameEn: '36-37', nameCn: '36-37' }
+  ];
+  const mixPlan1 = { plan: mixCov.concat([
+    { kind: '混搭套装', values: fiveVals, pcs: 5, nameEn: 'Grey x2 + White x2 + Clear x1 - 5 Pairs', nameCn: '灰×2+白×2+清仓×1 5件套装' }
+  ]) };
+  const srvMix1 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(mixPlan1) } }] }));
+  const rMix1 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvMix1.address().port, model: 'x', apiKey: 'x', hasKey: true });
+  srvMix1.close();
+  const mixRow = (rMix1.rows || []).find(r => r.pcs === 5);
+  check('混搭名里的「×2」不再被当成总件数 → 一轮通过、该行件数=5',
+    rMix1.ok === true && !!mixRow && (rMix1.attempts || []).length === 1,
+    'ok=' + rMix1.ok + ' 轮次=' + (rMix1.attempts || []).length + ' ／ ' + String(rMix1.error || '').slice(0, 100));
+  check('该行名字原样保留（×2 是每款数量，不该被改写）',
+    !!mixRow && mixRow.nameCn === '灰×2+白×2+清仓×1 5件套装', mixRow ? mixRow.nameCn : '');
+
+  const mixPlan2 = { plan: mixCov.concat([
+    { kind: '混搭套装', values: ['灰色30cm*30cm', '灰色30cm*30cm', '白色30cm*30cm'], pcs: 3, nameEn: 'Grey Grey White Mix', nameCn: '灰白混搭 2件装' }
+  ]) };
+  const srvMix2 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(mixPlan2) } }] }));
+  const rMix2 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvMix2.address().port, model: 'x', apiKey: 'x', hasKey: true });
+  srvMix2.close();
+  const rowMix2 = (rMix2.rows || []).find(r => String(r.nameCn || '').indexOf('混搭') >= 0);
+  check('名字写「2件装」但列了 3 个值 + 字段件数=3 → 通过，且名字改成「3件装」',
+    rMix2.ok === true && !!rowMix2 && rowMix2.pcs === 3 && rowMix2.nameCn === '灰白混搭 3件装',
+    rMix2.ok ? JSON.stringify(rowMix2 ? [rowMix2.pcs, rowMix2.nameCn] : null) : String(rMix2.error).slice(0, 120));
+  check('备注说明改过名字里的数字', (rMix2.notes || []).some(x => /改掉名字里的数字/.test(x)), JSON.stringify((rMix2.notes || []).slice(-1)));
+
+  const wrongFirst = { plan: mixCov.concat([
+    { kind: '混搭套装', values: fiveVals, pcs: 2, nameEn: 'Mix', nameCn: '灰白混搭 2件装' }
+  ]) };
+  const fixedSecond = { plan: mixCov.concat([
+    { kind: '混搭套装', values: fiveVals, pcs: 5, nameEn: 'Mix', nameCn: '灰白混搭 2件装' }
+  ]) };
+  let mixCalls = 0;
+  const srvMix3 = await new Promise((resolve) => {
+    const sv = http.createServer((req, res) => {
+      mixCalls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(mixCalls === 1 ? wrongFirst : fixedSecond) } }] }));
+    });
+    sv.listen(0, '127.0.0.1', () => resolve(sv));
+  });
+  const rMix3 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvMix3.address().port, model: 'x', apiKey: 'x', hasKey: true });
+  srvMix3.close();
+  check('模型第二轮把件数改对 → 不再被名字里的旧数字卡死（旧代码在这个形状上三轮全灭）',
+    rMix3.ok === true && mixCalls === 2, 'ok=' + rMix3.ok + ' 调用=' + mixCalls + ' ／ ' + String(rMix3.error || '').slice(0, 120));
+
+  const barePlan = { plan: mixCov.concat([
+    { kind: '混搭套装', values: fiveVals.concat(['【清仓随机款，尺码可指定】']), pcs: 6, nameEn: 'Mix', nameCn: '灰 x2 + 白 x2 + 清仓 x2' }
+  ]) };
+  const srvMix4 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify(barePlan) } }] }));
+  const rMix4 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srvMix4.address().port, model: 'x', apiKey: 'x', hasKey: true });
+  srvMix4.close();
+  const rowMix4 = (rMix4.rows || []).find(r => r.pcs === 6);
+  check('裸 ×N 混搭名原样保留（不许挑一个 ×2 乱改成别的数字）',
+    rMix4.ok === true && !!rowMix4 && rowMix4.nameCn === '灰 x2 + 白 x2 + 清仓 x2',
+    rowMix4 ? rowMix4.nameCn : String(rMix4.error || '').slice(0, 120));
+
   console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
   process.exit(bad ? 1 : 0);
 })();

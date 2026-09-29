@@ -77,6 +77,7 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
    - **这一行天然几件，由你列了哪些值决定**：同一维度列了多个值，每个值各算一件，再与其它维度的值相乘。
      列 2 色 + 1 码 = 2 件；列 2 色 + 2 码 = 4 件；列 4 色 + 1 码 = 4 件。pcs **只能是这个数的整数倍**。
      常见错误：想做「2 件情侣装/两双装」却列了 4 个颜色 —— 那已经是 4 件了；要 2 件就只列 2 个值。
+     名字里写「×2」时说的是**每款的件数**：像「1.5cm×2+2.5cm×2+3.5cm×1」这样的五件套，pcs 要写 5（各款相加），不是 2。
 5) 行的顺序 = 上架顺序，最想主推的排前面；总行数不超过 maxRows。
 6) 每个变种给两个名字，都要能看出这一行到底卖的是什么：
    nameEn = 英文名，必须纯英文（可含数字、x、-、+、尺寸与型号编码），用欧洲买家看得懂的说法，不要拼音、不要中文；
@@ -159,20 +160,48 @@ function parseJsonLoose(txt) {
 /* 名字里自称的件数（「×3」「3件装」「x5 Pack」）。
  * ⚠ 千万别把尺寸/型号里的数字当件数：「30cm*30cm」「3411牛角」「C20侧标」都不是件数，
  *   所以只认「×/x + 数字」或「数字 + 件装/片装/双装/Pack」这两种明确写法。 */
-const PCS_CLAIM_RE = /(?:×|✕|\bx)\s*(\d{1,2})(?![\d.])|(\d{1,2})\s*(?:件装|件套|双装|条装|片装|枚装|支装|套装|Pack)/i;
+/* 名字里的「件数说法」分两档：
+ *   ① 明确的总件数后缀（N件装/双装/套装/N Pairs/N Pack…）—— 只有全名里这一档出现**唯一**数字才可信；
+ *   ② 裸的「×N / xN」—— 只有全名里只出现一个不同数字时才信。
+ * 为什么不能见「×N」就取第一个：模型给混搭套装起名「1.5cm×2+2.5cm×2+3.5cm×1 五双套装」，
+ * 这里的 ×2 是**每款数量**，总件数是 5 —— 旧逻辑抓第一个 ×2 把正确的 5 覆盖成 2，
+ * 校验再以「值组合数 5」打回，模型怎么写都过不了（同一形状三轮全灭，用户报障）。
+ * 这条链上共有 claimedPcs / clampCountInName / rewriteClaimInName 三处用这俩正则，改一处要看三处。 */
+const PCS_SUFFIX_RE = /(\d{1,2})\s*(?:件装|件套|双装|双套装|双套|条装|片装|枚装|支装|套装|Pack|Pairs?)/i;
+const PCS_TIMES_RE = /(?:×|✕|\bx)\s*(\d{1,2})(?![\d.])/i;
+function claimCandidates(name, re) {
+  const s = String(name == null ? '' : name), out = new Set();
+  const g = new RegExp(re.source, 'gi');
+  let m;
+  while ((m = g.exec(s))) { const n = Number(m[1]); if (n >= 1 && n <= 99) out.add(n); }
+  return [...out];
+}
 function claimedPcs(name) {
-  const m = PCS_CLAIM_RE.exec(String(name == null ? '' : name));
-  if (!m) return 0;
-  const n = Number(m[1] || m[2]);
-  return n >= 1 && n <= 99 ? n : 0;
+  const suff = claimCandidates(name, PCS_SUFFIX_RE);
+  if (suff.length === 1) return suff[0];
+  if (suff.length > 1) return 0;               // 多个不同的总件数写法 → 说不清，别拿它覆盖件数
+  const times = claimCandidates(name, PCS_TIMES_RE);
+  return times.length === 1 ? times[0] : 0;    // 多个 ×N（多半在描述每款数量）→ 不猜
 }
 function clampCountInName(name, cap) {
-  return String(name).replace(PCS_CLAIM_RE, (whole, a, b) => (a ? whole.replace(a, String(cap)) : whole.replace(b, String(cap))));
+  const s = String(name);
+  const re = PCS_SUFFIX_RE.test(s) ? PCS_SUFFIX_RE : PCS_TIMES_RE;
+  return s.replace(new RegExp(re.source, 'i'), whole => whole.replace(/\d{1,2}/, String(cap)));
+}
+/* 名字里的件数写法与实际件数不一致、且能安全改写时：把那个数字改成实际件数。
+ * 「安全」= 这个写法没出现在本行任何一个值原文里（值名可能自带「5片装」，改了就是把值原文弄脏）。 */
+function rewriteClaimInName(name, target, vals) {
+  const s = String(name == null ? '' : name);
+  const m = PCS_SUFFIX_RE.exec(s);   // 只认带「件装/双(套)装/Pack/Pairs」后缀的总件数；裸 ×2 是每款数量，不能动
+  if (!m) return null;
+  const token = m[0];
+  if ((vals || []).some(v => String(v).indexOf(token) >= 0)) return null;
+  return s.slice(0, m.index) + token.replace(/\d{1,2}/, String(target)) + s.slice(m.index + token.length);
 }
 
 /* ---------- 硬校验：AI 只许用页面上的值，钱不归它管 ---------- */
 function validatePlan(product, plan) {
-  let pcsAligned = 0, pcsClamped = 0;      // 名字里写了件数时的计数（以前只在用到时才 ++，没声明 → 直接 ReferenceError 崩掉整轮）
+  let pcsAligned = 0, pcsClamped = 0, nameFixed = 0;   // 名字里写了件数时的计数（以前只在用到时才 ++，没声明 → 直接 ReferenceError 崩掉整轮）
   const errs = [];
   const all = new Map();                       // 值名 → 值对象（允许重名不同编码：按名字比对即可）
   ((product && product.specs) || []).forEach(d => (d.values || []).forEach(v => all.set(String(v.name).trim(), v)));
@@ -216,26 +245,34 @@ function validatePlan(product, plan) {
     // 不再拿一份词表去卡它 —— 之前用词表卡掉「双支装/收纳盒」这类词，等于禁止它设计变种，AI 档就变成了抄写员。
     const cnBad = /[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn);
     if (cnBad) { nameCn = ''; nameCnDropped.push(i + 1); }
-    // 名字里写了几件就得跟 pcs 一致：写成「×20 件装」而 pcs=10，卖家看到的就是件数错乱
+    // 名字里写了几件就得跟 pcs 一致：写成「×20 件装」而 pcs=10，卖家看到的就是件数错乱。
+    // 但名字里的数字跟值组合数打架时，要看谁说得通：跟「天然件数」对得上的那个才是对的。
+    // （否则模型字段写 5、名字里「每款×2」被误读成总数 2 → 覆盖 → 打回 → 每轮如此，怎么写都过不了）
     let pcsFinal = Math.round(pcs);
+    const natural0 = inherentPcs(vals);
     const claim = claimedPcs(nameCn || '') || claimedPcs(nameEn || '');
     if (claim && claim !== pcsFinal) {
-      if (claim <= MAX_PCS) { pcsFinal = claim; pcsAligned++; }
-      else {                                   // 名字吹到超过上限 → 件数夹到上限，并把名字里的数字同步改掉
+      const fieldOk = !(natural0 > 0) || pcsFinal % natural0 === 0;
+      const claimOk = !(natural0 > 0) || claim % natural0 === 0;
+      if (claim <= MAX_PCS && (claimOk || !fieldOk)) { pcsFinal = claim; pcsAligned++; }
+      else if (claim > MAX_PCS) {              // 名字吹到超过上限 → 件数夹到上限，并把名字里的数字同步改掉
         pcsFinal = MAX_PCS;
         if (nameCn) nameCn = clampCountInName(nameCn, MAX_PCS);
         nameEn = clampCountInName(nameEn, MAX_PCS);
         pcsClamped++;
+      } else {
+        // 名字里的数对不上值、字段件数是对的 → 保留字段件数，把名字里那个过时的数字同步改掉（能安全改才改）
+        if (nameCn) { const fx = rewriteClaimInName(nameCn, pcsFinal, vals); if (fx) { nameCn = fx; nameFixed++; } }
+        const fxEn = rewriteClaimInName(nameEn, pcsFinal, vals); if (fxEn) { nameEn = fxEn; }
       }
     }
     // 这一行「天然几件」由它列的值决定：同一维度列了多个值就各算一件，维度之间相乘。
     // 件数只能是它的整数倍 —— 否则就会出现「名字写 2 件装、值里却有 4 个颜色」这种自相矛盾的行
     // （用户报的「情侣混搭两双怎么算成 4 件」就是：4 色 × 1 码 = 4 件，模型却按 2 件命名）。
-    const natural = inherentPcs(vals);
-    if (natural > 0 && pcsFinal % natural !== 0) {
-      errs.push(`第 ${i + 1} 行：你列的规格值本身就有 ${natural} 件（${vals.join('+')} 的组合数），` +
-        `但件数写的是 ${pcsFinal} —— 件数必须是 ${natural} 的整数倍。` +
-        `想要 ${pcsFinal} 件就减少值（例如只保留一个颜色/尺码），想要 ${natural} 件就把件数写成 ${natural}。`);
+    if (natural0 > 0 && pcsFinal % natural0 !== 0) {
+      errs.push(`第 ${i + 1} 行：你列的规格值本身就有 ${natural0} 件（${vals.join('+')} 的组合数），` +
+        `但件数写的是 ${pcsFinal} —— 件数必须是 ${natural0} 的整数倍。` +
+        `想要 ${pcsFinal} 件就减少值（例如只保留一个颜色/尺码），想要 ${natural0} 件就把件数写成 ${natural0}。`);
     }
     if (unknown.length || !vals.length) return;
     rows.push({
@@ -256,7 +293,8 @@ function validatePlan(product, plan) {
   const bogusSkip = skipped.filter(s => !all.has(s.value)).map(s => s.value);
   const keptSkip = skipped.filter(s => all.has(s.value));
   const notes = [];
-  if (pcsAligned) notes.push('有 ' + pcsAligned + ' 行的件数按它名字里写的数字对齐了（模型写的件数与字段不一致时以名字为准）');
+  if (pcsAligned) notes.push('有 ' + pcsAligned + ' 行的件数按它名字里写的数字对齐了（与字段不一致时，跟值组合数对得上的那个为准）');
+  if (nameFixed) notes.push('有 ' + nameFixed + ' 行的名字里件数写法与值不符，已按值的组合数改掉名字里的数字（如「2件装」→「5件装」）');
   if (pcsClamped) notes.push('有 ' + pcsClamped + ' 行的名字件数超过上限，已夹到 ' + MAX_PCS + ' 并同步改了名字里的数字');
   if (bogusSkip.length) {
     notes.push('skipped 里有 ' + bogusSkip.length + ' 个页面上没有的值（多半是想跳过不存在的组合，如「颜色+尺码」），已忽略：'
