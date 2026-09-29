@@ -298,6 +298,9 @@ async function aiPageChecks() {
   check('请求里带上「显示中的规格级数」（跟着参数区那个上限）',
     !!asked && asked.body.params.maxDims === parseInt($('maxDims').value, 10),
     JSON.stringify(asked && asked.body.params) + ' vs 上限 ' + $('maxDims').value);
+  check('请求里带上「变种条数上限」（参数区值 —— 以前请求不带、服务端写死兜底 36）',
+    !!asked && asked.body.params.maxRows === parseInt($('maxVariants').value, 10),
+    JSON.stringify(asked && asked.body.params) + ' vs 上限 ' + $('maxVariants').value);
   check('请求体里没有密钥（密钥只在服务端）', !!asked && !/apiKey|sk-/.test(JSON.stringify(asked.body)));
   check('表格按 AI 的计划出 2 行 + 追加组合套装 6 行（引擎本来 ' + engRows + ' 行）', rows().length === 8, rows().length + ' 行');
   check('追加款在表里：1/2/3/6/12 件装 + 多色混搭（1 件装与 AI 的行 SKU 不同 → 不跳过）',
@@ -314,6 +317,32 @@ async function aiPageChecks() {
     /补充条件/.test($('aiBox').textContent) && /只上深色系/.test($('aiBox').textContent), $('aiBox').textContent.slice(0, 120));
   check('④ 区标题那行也标明「已参考补充条件」', /已参考你的补充条件/.test($('rowHint').textContent), $('rowHint').textContent.slice(-60));
   check('定价仍是本地引擎算的（不是 AI 给的数）', parseFloat(cell(0, priceCol)) > 0, cell(0, priceCol));
+
+  /* 「变种条数上限」不是写死的：参数区调小 → 表当场截断并写明；调回 → 恢复；AI 请求也用它当 maxRows */
+  check('参数区有「变种条数上限」输入框（默认 36）', !!$('maxVariants') && $('maxVariants').value === '36',
+    $('maxVariants') ? $('maxVariants').value : '无');
+  const fullCnt = rows().length;
+  $('maxVariants').value = '5';
+  $('maxVariants').dispatchEvent(new w.Event('change', { bubbles: true }));
+  check('调成 5 → 表当场截到 5 行（不再写死 36）', rows().length === 5, rows().length + ' 行');
+  check('截断在提示里写明「只保留前 5 行」', /只保留前 5 行/.test($('rowHint').textContent), $('rowHint').textContent.slice(0, 90));
+  $('maxVariants').value = '36';
+  $('maxVariants').dispatchEvent(new w.Event('change', { bubbles: true }));
+  check('调回 36 → 行数恢复（参数即时生效，不用重抓商品）', rows().length === fullCnt, rows().length + ' 行 vs ' + fullCnt);
+  asked = null;
+  $('btnAi').click();
+  await w.eval('new Promise(r => setTimeout(r, 40))');
+  check('AI 请求的 maxRows = 参数区值（默认 36）', !!asked && asked.body.params.maxRows === 36,
+    JSON.stringify(asked && asked.body.params));
+  $('maxVariants').value = '12';
+  $('maxVariants').dispatchEvent(new w.Event('change', { bubbles: true }));
+  asked = null;
+  $('btnAi').click();
+  await w.eval('new Promise(r => setTimeout(r, 40))');
+  check('改成 12 → AI 请求带 maxRows = 12（服务端/模型都按它排，不再兜底 36）', !!asked && asked.body.params.maxRows === 12,
+    JSON.stringify(asked && asked.body.params));
+  $('maxVariants').value = '36';
+  $('maxVariants').dispatchEvent(new w.Event('change', { bubbles: true }));
 
   /* 并发触发（读完商品自动排一版 + 手点按钮撞一起）不能同时飞：先飞的成功、后飞的失败会把计划冲掉 */
   let calls2 = 0;
