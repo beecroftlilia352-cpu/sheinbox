@@ -16,7 +16,7 @@ const path = require('path');
 const { packQtyOf, naturalPcsOf } = require('./app.js');   // 「5片装」→5 等口径与定价引擎共用，别各写一套
 
 const MAX_ROWS = 36;
-const MAX_PCS = 12;
+const MAX_PCS = 100;           // 件数上限：大包装/囤货档到 100 都合法；这个数必须同步写进提示词，别让模型猜（否则模型写 20 被拒 → 三轮死锁）
 const MAX_NOTE = 500;          // 用户在「补充条件」里最多能写多少字（够了，也免得把提示词撑爆）
 const DEFAULT_MODEL = 'deepseek-flash';           // 快（实测 5s 左右）且在真实页面上给出的计划最完整
 const TIMEOUT_MS = 90000;
@@ -56,6 +56,7 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
         而行数上限只有几十行时，把整张表塞成几十行单品 = 一行设计款都没有。这种商品要**主动精简**：
         覆盖行只挑代表（每色一行、每码至少出现一次就够），剩下的行数全留给 b 里的设计款。
         真有哪个值这版不上架，写进 skipped 说原因（但别用它来躲工作量）。
+      · 只有一个值的维度（如「规格 = 单片价格」）是计价单位，不是可挑的变体：不用特意写进每一行，也不用写进 skipped。
       · 确实不该上架的（如「清仓随机款」这类不确定款）才放进 skipped 并写原因。
       · skipped 的 value 只能是数据里**逐个出现**的那个值名本身 —— 别写「颜色+尺码」拼出来的组合，
         页面上不存在的组合不用列、也不用管（组合太多时靠少排几行来精简，不是靠 skipped）。
@@ -70,7 +71,7 @@ const SYS = `你是跨境电商 SHEIN 欧洲站的变种规划师。只做一件
       行数不够时宁可少加设计款，也不要动覆盖行。规格值多的商品，一件装行就是会占掉大部分行数，这是对的。
    d. 总量：尽量排到 6~maxRows 个变种；宁少勿乱、宁精勿堆。
 4) 件数与组合完全由你判断（这正是叫你来思考的原因），但：
-   - pcs = 这一行卖几件（1~12），要符合商品实际；
+   - pcs = 这一行卖几件，范围 1~100：多件装常见 2/3/5/6/9，易耗品可到 10/12/20/50 这种大包装档；单价高的别硬凑，要符合商品实际；
    - 规格值名里自带件数的（如「5片装」）→ pcs 就按它写（5），不要把整包当成 1 件；
    - kind = 你自己给这一行起一个 ≤8 字的短标签，说明这行是什么（单品 / 多件装 / 混搭 / 套装…随便你起）。不要写价格。
    - **名字里写了几件，就必须跟 pcs 一致**：pcs=3 就写「×3 / 3件装」，不要出现 pcs=10 而名字写「×20」这种对不上的情况。
@@ -212,6 +213,13 @@ function validatePlan(product, plan) {
     const cs = new Set(product.colors.map(c => String(c.name).trim()).filter(Boolean));
     if (cs.size) dimSets.push(cs);
   }
+  // 只有一个值的维度（如「规格 = 单片价格」）没有变体可挑 —— 它是计价单位/必选项，不是可选值：
+  // 不要求写进每一行、也不强制覆盖。强制覆盖模型解释不清，只能反复失败（用户报过 3 次不通过）。
+  const singleton = new Set();
+  ((product && product.specs) || []).forEach(d => {
+    const vs = (d.values || []).map(v => String(v.name).trim()).filter(Boolean);
+    if (vs.length === 1) singleton.add(vs[0]);
+  });
   const onePerDim = vals => dimSets.length ? (vals.length === dimSets.length && dimSets.every(s => vals.filter(v => s.has(v)).length === 1))
     : vals.length === 1;
   // 一行的「天然件数」：同一维度内相加、维度之间相乘（颜色 1 件 × 尺码 1 件 = 1 件，不是 2 件）
@@ -229,7 +237,7 @@ function validatePlan(product, plan) {
     if (unknown.length) { unknown.forEach(v => badValues.add(v)); errs.push(`第 ${i + 1} 行出现数据里没有的规格值：${unknown.join('、')}`); }
     vals.filter(v => all.has(v)).forEach(v => used.add(v));
     const pcs = Number(r && r.pcs);
-    if (!(pcs >= 1 && pcs <= MAX_PCS)) errs.push(`第 ${i + 1} 行件数不合法：${r && r.pcs}`);
+    if (!(pcs >= 1 && pcs <= MAX_PCS)) errs.push(`第 ${i + 1} 行件数不合法：${r && r.pcs} —— 件数必须是 1~${MAX_PCS} 之间的整数。`);
     let nameEn = String((r && r.nameEn) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!nameEn) errs.push(`第 ${i + 1} 行没有英文名`);
     const accessory = !!(r && r.accessory);
@@ -285,7 +293,7 @@ function validatePlan(product, plan) {
     value: String((s && s.value) || '').trim(), reason: String((s && s.reason) || '').trim() || '未说明'
   })).filter(s => s.value);
   const skipSet = new Set(skipped.map(s => s.value));
-  const missing = [...all.keys()].filter(v => !used.has(v) && !skipSet.has(v));
+  const missing = [...all.keys()].filter(v => !used.has(v) && !skipSet.has(v) && !singleton.has(v));
   if (missing.length) errs.push('这些规格值既没上架也没说明跳过：' + missing.join('、'));
   /* skipped 里出现数据里没有的值 —— 典型是「柠檬黄 44/45（标准尺码）」这种**页面上并不存在的组合**
    * （柠檬黄根本没有 44/45 码）。那不是错误：它想跳过一个本来就没有的东西，没有任何副作用。

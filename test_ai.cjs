@@ -282,6 +282,25 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
     rClaim.ok === true && (rClaim.rows || [])[0] && (rClaim.rows[0].pcs === 2), rClaim.ok ? '第一行 pcs=' + (rClaim.rows[0] || {}).pcs : String(rClaim.error).slice(0, 120));
   check('对齐过的行会在备注里说明', /按它名字里写的数字对齐/.test((rClaim.notes || []).join('；')), JSON.stringify((rClaim.notes || []).slice(-1)));
 
+  /* 12b) 件数上限：大包装 20 件必须合法（旧上限 12 把「×20 囤货装」全拒 → 三轮死锁，用户报过）；
+   *      超过 100 才拒，并且报错要写明范围（模型不然只能瞎猜）。顺带：单值维度（如「规格=单片价格」）不强制覆盖。 */
+  const bigProd = { specs: [
+    { label: '颜色', values: [{ name: '红色', price: 0.43 }, { name: '蓝色', price: 0.43 }] },
+    { label: '规格', values: [{ name: '单片价格', price: 0.43 }] } ] };
+  const bigOk = A.normalize(bigProd, { plan: [
+    { kind: '单品', values: ['红色'], pcs: 1, nameEn: 'Red Single', nameCn: '红色 单片' },
+    { kind: '单品', values: ['蓝色'], pcs: 1, nameEn: 'Blue Single', nameCn: '蓝色 单片' },
+    { kind: '囤货', values: ['红色'], pcs: 20, nameEn: 'Red x20 Bulk', nameCn: '红色 ×20 囤货装' } ] }, {});
+  check('件数 20（大包装/囤货）合法通过（上限 100，不再是 12）', bigOk.ok === true, bigOk.error || '');
+  check('单值维度「单片价格」不强制覆盖（不再报「既没上架也没说明跳过」）',
+    bigOk.ok === true && !/既没上架/.test(bigOk.error || ''), String(bigOk.error || '').slice(0, 120));
+  const bigBad = A.normalize(bigProd, { plan: [
+    { kind: '单品', values: ['红色'], pcs: 1, nameEn: 'Red', nameCn: '红色' },
+    { kind: '单品', values: ['蓝色'], pcs: 1, nameEn: 'Blue', nameCn: '蓝色' },
+    { kind: '囤货', values: ['红色'], pcs: 101, nameEn: 'Red x101', nameCn: '红色 ×101' } ] }, {});
+  check('件数 101 超上限 → 拒绝，且报错写明「1~100」（模型能照着改）',
+    bigBad.ok === false && /1~100/.test(bigBad.error || ''), String(bigBad.error || '').slice(0, 140));
+
   const srv2 = await mk(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ plan: [{ kind: 'x', values: ['数据里没有的值'], pcs: 1, nameEn: 'Y', nameCn: '值' }] }) } }] }));
   const r2 = await A.plan(prod, {}, { baseUrl: 'http://127.0.0.1:' + srv2.address().port, model: 'x', apiKey: 'k', hasKey: true });
   srv2.close();
