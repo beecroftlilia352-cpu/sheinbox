@@ -265,6 +265,8 @@ const p725 = P.parse(fx725, { url: 'https://detail.1688.com/offer/725837664482.h
 eq('足弓垫(725837664482)：单位识别为 双（1双起批 + 库存879587双 + 100-999双 + ≥1000双）', p725.unit, '双');
 eq('没有单位证据 → 回落 件（不编造）', P.parse('某商品标题\n规格说明文字 2件以内 现在付款，预计明天达', { url: 'https://detail.1688.com/offer/1.html' }).unit, '件');
 eq('件装商品：单位 件', P.parse('某商品标题\n1件起批\n库存500件\n100-999件', { url: 'https://detail.1688.com/offer/2.html' }).unit, '件');
+eq('同一套代码按页面文字取不同单位：卷（1卷起批/库存900卷）', P.parse('胶带标题\n1卷起批\n库存900卷', { url: 'https://detail.1688.com/offer/4.html' }).unit, '卷');
+eq('同一套代码按页面文字取不同单位：对（1对起批/库存500对）', P.parse('耳钉标题\n1对起批\n库存500对', { url: 'https://detail.1688.com/offer/5.html' }).unit, '对');
 /* 用户报障：902902556556 交易单位是「卡」（1卡起批/已售800+卡/库存164071卡）但商家规格值写「6个/卡」——
  * 可数的单品单位 = 斜杠前的「个」。别再翻推荐区（那里有别的商品的「已售2万+瓶」）。 */
 const fx902 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-902902556556.txt'), 'utf8');
