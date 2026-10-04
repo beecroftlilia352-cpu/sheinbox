@@ -456,5 +456,21 @@ near('组合价：没有 skuPrices 时行为照旧（回落参数价）',
     { label: '颜色', values: [{ name: '黄', code: null, price: null, stock: 1 }] }] }, { unitCost: 9.99, costMode: 'spec' }), '黄'),
   9.99);
 
+/* 单位来自页面（双/件/卷/对…）：套装梯与混搭的名字后缀必须用它，不许写死「件」。
+ * 用户报过：单位是双的商品，变种名却全显示 6件装/12件装。 */
+const uniProd = (unit, vals) => ({ unit, specs: [{ label: '颜色', values: vals }] });
+const uniPlan = nm => ({ rows: [{ kind: '单品', values: [nm], pcs: 1, accessory: false, nameEn: 'X', nameCn: nm }], skipped: [], notes: [] });
+const uShuang = V.buildVariants(uniProd('双', [{ name: '均码', price: 5, stock: 100 }]), { unitCost: 5, costMode: 'spec', maxVariants: 60, aiPlan: uniPlan('均码') });
+check('unit=双：套装梯名字/标签用「双装」（2/3/6/12 双装，1双装与单品同 SKU 跳过）',
+  ['2双装', '3双装', '6双装', '12双装'].every(k => uShuang.some(r => r.appended && r.kind === k)) &&
+  !uShuang.some(r => r.appended && /件装/.test(String(r.nameCn))),
+  uShuang.filter(r => r.appended).map(r => r.kind + ':' + r.nameCn).join(' | '));
+const uJian = V.buildVariants(uniProd('件', [{ name: '均码', price: 5, stock: 100 }]), { unitCost: 5, costMode: 'spec', maxVariants: 60, aiPlan: uniPlan('均码') });
+check('unit=件（或没识别到单位）：仍是「件装」，不误改', uJian.some(r => r.appended && r.kind === '6件装'));
+const uMix = V.buildVariants(uniProd('双', [{ name: '蓝黑', price: 5, stock: 100 }, { name: '藏青', price: 5, stock: 100 }]), { unitCost: 5, costMode: 'spec', maxVariants: 60, aiPlan: uniPlan('蓝黑') });
+check('unit=双：多色混搭名字也用双（各1双 2双装）',
+  uMix.some(r => r.appended && /各1双/.test(String(r.nameCn)) && /2双装/.test(String(r.nameCn))),
+  uMix.filter(r => r.appended).map(r => r.kind + ':' + r.nameCn).join(' | '));
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

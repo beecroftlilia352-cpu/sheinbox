@@ -437,6 +437,22 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
     rMix4.ok === true && !!rowMix4 && rowMix4.nameCn === '灰 x2 + 白 x2 + 清仓 x2',
     rowMix4 ? rowMix4.nameCn : String(rMix4.error || '').slice(0, 120));
 
+  /* 单位（双/件/卷/对…）来自页面：名字与 kind 里的「N件装」按页面单位统一改写；
+   * 值原文带「件装」的行不动（不许弄脏值）。 */
+  const uProd = { unit: '双', specs: [{ label: '尺寸', values: [{ name: '均码', price: 5, stock: null }] }] };
+  const uSw = A.normalize(uProd, { plan: [
+    { kind: '6件装', values: ['均码'], pcs: 6, nameEn: 'One Size - 6 Pack', nameCn: '均码 6件装' }] }, {});
+  check('unit=双：名字与 kind 的「6件装」自动改成「6双装」',
+    uSw.ok === true && uSw.rows[0] && uSw.rows[0].nameCn === '均码 6双装' && uSw.rows[0].kind === '6双装',
+    JSON.stringify(uSw.rows[0] || uSw.error));
+  check('单位改写会在 notes 里说明', (uSw.notes || []).some(x => /按页面单位/.test(x)), JSON.stringify(uSw.notes));
+  const uKeep = A.normalize({ unit: '件', specs: uProd.specs }, { plan: [
+    { kind: '6件装', values: ['均码'], pcs: 6, nameEn: 'One Size - 6 Pack', nameCn: '均码 6件装' }] }, {});
+  check('unit=件：不动', uKeep.ok === true && uKeep.rows[0] && uKeep.rows[0].nameCn === '均码 6件装', JSON.stringify(uKeep.rows[0] || uKeep.error));
+  const uMsgs = A.buildMessages(uProd, {});
+  check('unit_rule 进了请求（告诉模型页面单位是双，别写件装）',
+    JSON.stringify(uMsgs).includes('unit_rule') && JSON.stringify(uMsgs).includes('双装'), '');
+
   console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
   process.exit(bad ? 1 : 0);
 })();

@@ -261,12 +261,15 @@
       const fitCn = (full, compact, tiny) => (!nameMaxCn || full.length <= nameMaxCn) ? full : ((compact.length <= nameMaxCn) ? compact : tiny);
       // 值里常带括号注释（白色【3411牛角】/36/37（标准尺码））：名字里可以省，计划里的值仍是逐字原文
       const stripMarks = s => String(s || '').replace(/[【（(\[][^】）)\]]*[】）)\]]/g, '').trim();
+      /* 页面写明的计价单位（双/件/卷/对…，解析层从「1双起批 / 库存…双」读出）：名字里的「N?装」一律用它，
+       * 不许写死「件」。数据里没有单位就退回「件」。 */
+      const unit = String((product && product.unit) || p.unit || '件');
       const appended = [];
       if (defColor) {
         const baseVals = [defColor.name].concat(defSize ? [defSize.name] : []);
         [1, 2, 3, 6, 12].forEach(q => appended.push({
-          values: baseVals, pcs: q, accessory: false, kind: q + '件装', appended: true,
-          nameCn: fitCn(defColor.name + tailCn + ' ' + q + '件装',
+          values: baseVals, pcs: q, accessory: false, kind: q + unit + '装', appended: true,
+          nameCn: fitCn(defColor.name + tailCn + ' ' + q + unit + '装',
             stripMarks(defColor.name) + (defSize ? stripMarks(defSize.name) : '') + '×' + q, stripMarks(defColor.name) + '×' + q),
           nameEn: enOf(defColor.name) + tailEn + ' - ' + q + ' Pack',
         }));
@@ -278,8 +281,8 @@
           const mixPcs = 1 + mixColors.length;                               // 各 1 件
           appended.push({
             values: mixVals, pcs: mixPcs, accessory: false, kind: '多色混搭', appended: true,
-            nameCn: fitCn([defColor.name].concat(mixColors.map(v => v.name)).join('+') + ' 各1件 ' + mixPcs + '件装',
-              '混搭' + (mixColors.length + 1) + '色×' + mixPcs, '混搭' + mixPcs + '件'),
+            nameCn: fitCn([defColor.name].concat(mixColors.map(v => v.name)).join('+') + ' 各1' + unit + ' ' + mixPcs + unit + '装',
+              '混搭' + (mixColors.length + 1) + '色×' + mixPcs, '混搭' + mixPcs + unit),
             nameEn: [defColor.name].concat(mixColors.map(v => v.name)).map(enOf).join(' + ') + ' - ' + mixPcs + ' Pack',
           });
         }

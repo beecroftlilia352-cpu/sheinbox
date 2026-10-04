@@ -647,6 +647,36 @@
     return product;
   }
 
+  /* 页面写明的计价单位（双/件/卷/对/只/个/条/片/枚/支/套/张/盒/包/副/顶/把/瓶/袋）。
+   * 只认商品自己的证据：「1双起批 / 每包5双 / 库存879587双 / 100-999双 / ≥1000双」+ 第一个「已售…双」。
+   * 推荐位的已售(X)与规格弹层的「¥0.34库存…件」可能是别的商品/单色价 —— 前者只取第一条，
+   * 后者按「同一行里有没有 ¥」排除。都找不到就回「件」，绝不编造。 */
+  function pickUnit(text) {
+    const U = '双件卷对只个条片枚支套张盒包副顶把瓶袋';
+    const votes = new Map();
+    const bump = u => { if (u) votes.set(u, (votes.get(u) || 0) + 1); };
+    let m, re;
+    re = new RegExp('\\d+(?:\\.\\d+)?\\s*([' + U + '])\\s*起(?:批|订)', 'g');
+    while ((m = re.exec(text))) bump(m[1]);                       // 1双起批
+    re = new RegExp('每\\s*[包箱盒袋卷把捆]\\s*\\d+\\s*([' + U + '])', 'g');
+    while ((m = re.exec(text))) bump(m[1]);                       // 每包5双
+    re = new RegExp('库存\\s*[\\d,]+\\s*([' + U + '])', 'g');
+    while ((m = re.exec(text))) {                                 // 库存879587双（同行有 ¥ 的是弹层单色价，不算）
+      const before = text.slice(0, m.index).split(/\r?\n/).pop() || '';
+      if (!/[¥￥]/.test(before)) bump(m[1]);
+    }
+    re = new RegExp('(?:≥|>=)\\s*\\d+\\s*([' + U + '])', 'g');
+    while ((m = re.exec(text))) bump(m[1]);                       // ≥1000双
+    re = new RegExp('\\d{2,6}\\s*[-~至]\\s*\\d{2,7}\\s*([' + U + '])', 'g');
+    while ((m = re.exec(text))) bump(m[1]);                       // 100-999双
+    re = new RegExp('已售\\s*[\\d.]+\\s*[万亿+]*\\s*([' + U + '])');
+    m = re.exec(text);                                            // 只取第一个「已售」：主面板的在推荐位前面
+    if (m) bump(m[1]);
+    let best = '件', bestN = 0;
+    votes.forEach((n, u) => { if (n > bestN) { bestN = n; best = u; } });
+    return best;
+  }
+
   function parse(input, meta) {
     meta = meta || {};
     const html = /<\/(div|span|html|body|table)>/i.test(input || '') ? input : '';
@@ -681,6 +711,7 @@
       soldOut: specs.soldOut || [],                     // 已售罄、没列入的规格值（页面会提示，别让它们悄悄消失）
       colors: specs.length ? specs[0].values : [],      // 兼容：父规格的值 = 以前说的「颜色」
       specLabel: specs.length ? specs[0].label : null,
+      unit: pickUnit(text),                             // 页面写明的计价单位（双/件/卷/对…）——变种名后缀用它
       priceTiers: pickPrices(text, specs.blockEnd),
       freightNote: (flat.match(/运费\s*[¥￥]\s*\d+(?:\.\d+)?\s*起?/) || [])[0] || null,
       shipFrom: (flat.match(/([\u4e00-\u9fa5]{2,10}(?:省)?[\u4e00-\u9fa5]{2,10}市?)送至/) || [])[1] || null,

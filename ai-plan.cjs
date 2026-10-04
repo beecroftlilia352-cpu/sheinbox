@@ -109,7 +109,8 @@ function buildMessages(product, params, fixHint) {
       offerId: (product && product.source && product.source.offerId) || null,
       weight_g: (product && product.weight_g) || null,
       minQty: (product && product.minQty) || null,
-      specs
+      specs,
+      unit: (product && product.unit) || null            // 页面写明的计价单位（双/件/卷/对…），名字后缀要用它
     },
     rules: { maxRows: p.maxRows || MAX_ROWS, maxValuesPerMix: p.maxValuesPerMix || 12 },
     facts: '成本与定价由系统按每个规格自己的标价计算，你不需要关心价格'
@@ -120,6 +121,8 @@ function buildMessages(product, params, fixHint) {
   if (note) payload.extra_conditions = note;
   const nl = nameLimitOf(note);
   if (nl) payload.hard_limits = (payload.hard_limits || []).concat(['中文变种名（nameCn）不超过 ' + nl + ' 个字 —— 超过会被整份打回重排']);
+  const unitOf = String((product && product.unit) || '件');
+  if (unitOf !== '件') payload.unit_rule = '这个商品页面上写明的计价单位是「' + unitOf + '」：nameCn 与 kind 里写件数一律用「' + unitOf + '」（例：6' + unitOf + '装、两' + unitOf + '装），不要写「N件装」——页面单位是什么就写什么。';
   const msgs = [
     { role: 'system', content: SYS },
     { role: 'user', content: JSON.stringify(payload) }
@@ -168,7 +171,7 @@ function parseJsonLoose(txt) {
  * 这里的 ×2 是**每款数量**，总件数是 5 —— 旧逻辑抓第一个 ×2 把正确的 5 覆盖成 2，
  * 校验再以「值组合数 5」打回，模型怎么写都过不了（同一形状三轮全灭，用户报障）。
  * 这条链上共有 claimedPcs / clampCountInName / rewriteClaimInName 三处用这俩正则，改一处要看三处。 */
-const PCS_SUFFIX_RE = /(\d{1,2})\s*(?:件装|件套|双装|双套装|双套|条装|片装|枚装|支装|套装|Pack|Pairs?)/i;
+const PCS_SUFFIX_RE = /(\d{1,2})\s*(?:件装|件套|双装|双套装|双套|对装|只装|卷装|个装|张装|条装|片装|枚装|支装|盒装|袋装|瓶装|把装|副装|顶装|套装|Pack|Pairs?)/i;
 const PCS_TIMES_RE = /(?:×|✕|\bx)\s*(\d{1,2})(?![\d.])/i;
 function claimCandidates(name, re) {
   const s = String(name == null ? '' : name), out = new Set();
@@ -220,6 +223,12 @@ function validatePlan(product, plan) {
     const vs = (d.values || []).map(v => String(v.name).trim()).filter(Boolean);
     if (vs.length === 1) singleton.add(vs[0]);
   });
+  /* 页面写明的计价单位（双/件/卷/对…）：名字与 kind 里的「N?装」必须用它，不许写死「件」。
+   * 模型偶尔仍写「6件装」→ 按页面单位统一改写（显示层修正，值本身不动），免得整表显示全是「件」
+   * （用户报过：页面单位是双，变种名却全写成 6件装/12件装）。 */
+  const unit = String((product && product.unit) || '件');
+  let unitFixed = 0;
+  const unitSwap = s => String(s == null ? '' : s).replace(/([0-9一二三四五六七八九十两]+)\s*件装/g, '$1' + unit + '装');
   const onePerDim = vals => dimSets.length ? (vals.length === dimSets.length && dimSets.every(s => vals.filter(v => s.has(v)).length === 1))
     : vals.length === 1;
   // 一行的「天然件数」：同一维度内相加、维度之间相乘（颜色 1 件 × 尺码 1 件 = 1 件，不是 2 件）
@@ -229,7 +238,10 @@ function validatePlan(product, plan) {
 
   const rows = [], used = new Set(), badValues = new Set(), nameCnDropped = [];
   plan.plan.forEach((r, i) => {
-    const kind = String((r && r.kind) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8);
+    let rowUnitFixed = false;
+    const rawKind = String((r && r.kind) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8);
+    const kind = unitSwap(rawKind);
+    if (kind !== rawKind) rowUnitFixed = true;
     if (/[¥￥]|\d\s*元|价格|成本|利润|定价/i.test(kind)) errs.push(`第 ${i + 1} 行的 kind 里带了价格/成本，这不该你写`);
     const vals = (r && Array.isArray(r.values) ? r.values : []).map(v => String(v).trim()).filter(Boolean);
     if (!vals.length) errs.push(`第 ${i + 1} 行没有规格值`);
@@ -253,6 +265,10 @@ function validatePlan(product, plan) {
     // 不再拿一份词表去卡它 —— 之前用词表卡掉「双支装/收纳盒」这类词，等于禁止它设计变种，AI 档就变成了抄写员。
     const cnBad = /[¥￥]|\d\s*元|价格|成本|利润|定价|进价|售价/i.test(nameCn);
     if (cnBad) { nameCn = ''; nameCnDropped.push(i + 1); }
+    if (nameCn && unit !== '件' && !vals.some(v => String(v).indexOf('件装') >= 0)) {
+      const sw = unitSwap(nameCn);
+      if (sw !== nameCn) { nameCn = sw; rowUnitFixed = true; }
+    }
     // 名字里写了几件就得跟 pcs 一致：写成「×20 件装」而 pcs=10，卖家看到的就是件数错乱。
     // 但名字里的数字跟值组合数打架时，要看谁说得通：跟「天然件数」对得上的那个才是对的。
     // （否则模型字段写 5、名字里「每款×2」被误读成总数 2 → 覆盖 → 打回 → 每轮如此，怎么写都过不了）
@@ -283,6 +299,7 @@ function validatePlan(product, plan) {
         `想要 ${pcsFinal} 件就减少值（例如只保留一个颜色/尺码），想要 ${natural0} 件就把件数写成 ${natural0}。`);
     }
     if (unknown.length || !vals.length) return;
+    if (rowUnitFixed) unitFixed++;
     rows.push({
       kind, values: vals, pcs: pcsFinal, accessory,
       nameCn: nameCn || null, nameEn
@@ -304,6 +321,7 @@ function validatePlan(product, plan) {
   if (pcsAligned) notes.push('有 ' + pcsAligned + ' 行的件数按它名字里写的数字对齐了（与字段不一致时，跟值组合数对得上的那个为准）');
   if (nameFixed) notes.push('有 ' + nameFixed + ' 行的名字里件数写法与值不符，已按值的组合数改掉名字里的数字（如「2件装」→「5件装」）');
   if (pcsClamped) notes.push('有 ' + pcsClamped + ' 行的名字件数超过上限，已夹到 ' + MAX_PCS + ' 并同步改了名字里的数字');
+  if (unitFixed) notes.push('有 ' + unitFixed + ' 行的名字/标签按页面单位把「件装」统一改成了「' + unit + '装」');
   if (bogusSkip.length) {
     notes.push('skipped 里有 ' + bogusSkip.length + ' 个页面上没有的值（多半是想跳过不存在的组合，如「颜色+尺码」），已忽略：'
       + bogusSkip.slice(0, 5).join('、') + (bogusSkip.length > 5 ? ' 等' : ''));

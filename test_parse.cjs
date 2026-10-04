@@ -258,5 +258,13 @@ check('属性表商品：42/43、44/45 这两档补上了（只在件重尺表�
 eq('属性表商品：单件重量用件重尺表最轻一档兜底', p100.weight_g, 365);
 check('属性表商品：不再退化成「单色兜底」', (p100.colors || []).length === 9, String((p100.colors || []).length));
 
+/* 页面写明的计价单位（「1双起批 / 库存879587双 / ≥1000双」）——变种名后缀要用它，不许写死「件」。
+ * 用户报过：单位是双的商品，变种名却全显示成 6件装/12件装。 */
+const fx725 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-725837664482.txt'), 'utf8');
+const p725 = P.parse(fx725, { url: 'https://detail.1688.com/offer/725837664482.html' });
+eq('足弓垫(725837664482)：单位识别为 双（1双起批 + 库存879587双 + 100-999双 + ≥1000双）', p725.unit, '双');
+eq('没有单位证据 → 回落 件（不编造）', P.parse('某商品标题\n规格说明文字 2件以内 现在付款，预计明天达', { url: 'https://detail.1688.com/offer/1.html' }).unit, '件');
+eq('件装商品：单位 件', P.parse('某商品标题\n1件起批\n库存500件\n100-999件', { url: 'https://detail.1688.com/offer/2.html' }).unit, '件');
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);
