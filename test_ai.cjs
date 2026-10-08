@@ -42,8 +42,8 @@ check('提示词把「覆盖」定义成必须有它自己的一件装行（每�
 check('提示词明令禁止拿覆盖行去凑多件装/混搭（否则整表没有一件装，用户看到的就是「件数翻倍」）',
   /绝不许把基础行改成多件装/.test(msgs[0].content) && /翻了倍/.test(msgs[0].content));
 check('提示词要求名字里写的件数必须与 pcs 一致', /名字里写了几件，就必须跟 pcs 一致/.test(msgs[0].content));
-check('提示词不再禁止模型写多件装/配件这类词（那是设计，不是模板）',
-  !/绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content) && /件数写件数/.test(msgs[0].content));
+check('提示词不再禁止模型写多件装/配件这类词（那是设计，不是模板），且要求每行都带件数+单位',
+  !/绝对不要在名字里加数据里没有的单位或配件名/.test(msgs[0].content) && /每一行都必须带件数与单位/.test(msgs[0].content));
 check('提示词里没有密钥、也没有要求它算钱', !/apiKey|sk-/.test(msgs[1].content));
 check('提示词要模型写中文变种名（nameCn）与英文名（nameEn）', /nameCn/.test(msgs[0].content) && /nameEn/.test(msgs[0].content));
 check('提示词明确中文名不许带价格/成本', /不要价格\/成本/.test(msgs[0].content));
@@ -452,6 +452,8 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   const uMsgs = A.buildMessages(uProd, {});
   check('unit_rule 进了请求（告诉模型页面单位是双，别写件装）',
     JSON.stringify(uMsgs).includes('unit_rule') && JSON.stringify(uMsgs).includes('双装'), '');
+  check('名字一致性：单件行也要带件数+单位（SYS「单件行也要写1件装」+ unit_rule「1双装」）',
+    JSON.stringify(uMsgs).includes('单件行也要写') && JSON.stringify(uMsgs).includes('1双装'), '');
 
   /* 中文数字件数（报障 1059815945700）：六个+杯架 = 7 件、六个+六个+杯架 = 13 件 —— 模型这么写必须过 */
   const wProd = { unit: '个', specs: [{ label: '颜色', values: [
