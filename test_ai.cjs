@@ -453,6 +453,19 @@ check('说明本来有多少行', mr.ok && mr.truncated && mr.truncated.total ==
   check('unit_rule 进了请求（告诉模型页面单位是双，别写件装）',
     JSON.stringify(uMsgs).includes('unit_rule') && JSON.stringify(uMsgs).includes('双装'), '');
 
+  /* 中文数字件数（报障 1059815945700）：六个+杯架 = 7 件、六个+六个+杯架 = 13 件 —— 模型这么写必须过 */
+  const wProd = { unit: '个', specs: [{ label: '颜色', values: [
+    { name: 'SCN376-六个(10*10)', price: null }, { name: 'SCN375-六个(10*10)', price: null }, { name: '杯架', price: null } ] }] };
+  const wR = A.normalize(wProd, { plan: [
+    { kind: '单品', values: ['SCN376-六个(10*10)'], pcs: 6, nameEn: 'SCN376 x6', nameCn: 'SCN376六个 6件装' },
+    { kind: '单品', values: ['SCN375-六个(10*10)'], pcs: 6, nameEn: 'SCN375 x6', nameCn: 'SCN375六个 6件装' },
+    { kind: '单品', values: ['杯架'], pcs: 1, nameEn: 'Rack', nameCn: '杯架' },
+    { kind: '组合', values: ['SCN376-六个(10*10)', '杯架'], pcs: 7, nameEn: 'SCN376 + Rack 7 Pcs', nameCn: 'SCN376六个+杯架 7件套' },
+    { kind: '组合', values: ['SCN376-六个(10*10)', 'SCN375-六个(10*10)', '杯架'], pcs: 13, nameEn: 'SCN376+SCN375+Rack 13 Pcs', nameCn: 'SCN376+SCN375+杯架 13件套' } ] }, {});
+  check('中文数字件数：六个+杯架=7 件、六个+六个+杯架=13 件 —— 模型这么写照样通过（此前三轮死锁）',
+    wR.ok === true && (wR.rows || []).some(r => r.pcs === 7) && (wR.rows || []).some(r => r.pcs === 13),
+    wR.ok ? '' : String(wR.error).slice(0, 160));
+
   console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
   process.exit(bad ? 1 : 0);
 })();

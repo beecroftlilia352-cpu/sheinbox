@@ -273,6 +273,11 @@ const fx902 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-9029025565
 eq('除臭球(902902556556)：规格值「6个/卡」→ 单位取 个（不是 瓶/卡）', P.parse(fx902, { url: 'https://detail.1688.com/offer/902902556556.html' }).unit, '个');
 eq('陷阱：主面板单位不认识（卡）、推荐区有别家单位 → 不许翻找，回落 件',
   P.parse('标题\n1卡起批\n已售800+卡\n库存500卡\n同款推荐\n已售2万+瓶\n已售17万+袋', { url: 'https://detail.1688.com/offer/3.html' }).unit, '件');
+/* 报障 1059815945700：值原文「SCN376-六个(10*10)」——中文数字「六个」必须被件数解析认到（见 test_app/test_ai） */
+const fx1059 = fs.readFileSync(path.join(__dirname, 'fixtures', 'offer-1059815945700.txt'), 'utf8');
+const p1059 = P.parse(fx1059, { url: 'https://detail.1688.com/offer/1059815945700.html' });
+eq('杯垫(1059815945700)：一维 3 值', ((p1059.specs || [])[0] || { values: [] }).values.length, 3);
+check('杯垫(1059815945700)：值原文含「SCN376-六个(10*10)」', ((p1059.specs || [])[0] || { values: [] }).values.some(v => v.name === 'SCN376-六个(10*10)'));
 
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

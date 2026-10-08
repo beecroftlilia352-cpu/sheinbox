@@ -472,5 +472,13 @@ check('unit=双：多色混搭名字也用双（各1双 2双装）',
   uMix.some(r => r.appended && /各1双/.test(String(r.nameCn)) && /2双装/.test(String(r.nameCn))),
   uMix.filter(r => r.appended).map(r => r.kind + ':' + r.nameCn).join(' | '));
 
+/* 中文数字件数（报障 1059815945700）：「六个(10*10)」以前被当成 1 件 → AI 写「六个+杯架=7 件」三轮死锁 */
+check('packQtyOf 认中文数字：SCN376-六个(10*10) → 6', V.packQtyOf('SCN376-六个(10*10)') === 6);
+check('packQtyOf 中文数字组合形：十二片装 → 12、二十五片装 → 25、十个装 → 10',
+  V.packQtyOf('十二片装') === 12 && V.packQtyOf('二十五片装') === 25 && V.packQtyOf('十个装') === 10);
+check('packQtyOf 不误伤普通词：一件代发 → 1、十字纹贴纸 → 1、一起买 → 1',
+  V.packQtyOf('一件代发') === 1 && V.packQtyOf('十字纹贴纸') === 1 && V.packQtyOf('一起买') === 1);
+check('天然件数：六个 + 杯架 = 7（同一维度相加）', V.naturalPcsOf([['SCN376-六个(10*10)', '杯架']]) === 7);
+
 console.log(bad ? `\n${bad} 项失败` : '\n全部通过');
 process.exit(bad ? 1 : 0);

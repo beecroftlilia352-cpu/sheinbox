@@ -153,13 +153,23 @@
    * 为什么必须有它：1688 一维多值常把「一包几件」写进值名，而且该值的标价是**整包的价**
    * （5片装 11.5 元 = 那 5 件的钱）。不认这个件数，就会出现「11.5 又被 ×5」的 25 倍错价。 */
   const PACK_UNITS = '片|个|支|件|条|只|双|枚|张|袋|盒|瓶|包|罐|卷|套';
+  /* 中文数字件数：「六个(10*10)」「十二片装」这类写法也要认（只认 1~99 的常见写法，认不出按 1 件，不猜）。
+   * 报障 1059815945700：「SCN376-六个(10*10)」只认阿拉伯数字 → 被当成 1 件，AI 写「六个+杯架=7 件」永远过不了校验。 */
+  const CN_DIGITS = { '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+  function cnCount(t) {
+    if (t === '十') return 10;
+    const m = /^([一二三四五六七八九两])?十([一二三四五六七八九])?$/.exec(t);   // 十二 / 二十 / 二十五
+    if (m) return (m[1] ? CN_DIGITS[m[1]] : 1) * 10 + (m[2] ? CN_DIGITS[m[2]] : 0);
+    if (t.length === 1 && CN_DIGITS[t]) return CN_DIGITS[t];
+    return 0;
+  }
   function packQtyOf(name) {
     const s = String(name == null ? '' : name);
     const hits = [];
-    const re = new RegExp('([0-9]+)\\s*(?:' + PACK_UNITS + ')\\s*(?:装|包装|套)?(?!起)', 'g');
+    const re = new RegExp('([0-9]+|[一二三四五六七八九十两]{1,3})\\s*(?:' + PACK_UNITS + ')\\s*(?:装|包装|套)?(?!起)', 'g');
     let m;
     while ((m = re.exec(s))) {
-      const q = parseInt(m[1], 10);
+      const q = /^[0-9]+$/.test(m[1]) ? parseInt(m[1], 10) : cnCount(m[1]);
       if (q > 1 && q <= 200) hits.push(q);
     }
     const uniq = Array.from(new Set(hits));
